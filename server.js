@@ -3,8 +3,18 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { pool } = require('./config/database');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'],
+    credentials: true
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 
 // Security middleware
@@ -16,6 +26,10 @@ app.use(cors({
 // Body parsing middleware
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Rate limiting
+const { generalLimiter } = require('./middleware/rateLimiter');
+app.use('/api/', generalLimiter);
 
 // Security headers
 app.use((req, res, next) => {
@@ -40,12 +54,40 @@ pool.query('SELECT NOW()', (err, res) => {
 // Authentication middleware
 const authRoutes = require('./routes/auth');
 
+// Start crypto price updates
+const cryptoPriceService = require('./services/cryptoPriceService');
+cryptoPriceService.startPriceUpdates(60000); // Update every minute
+
+// Start pool wallet blockchain monitoring
+const poolBlockchainMonitor = require('./services/poolBlockchainMonitor');
+// Start monitoring after a 10-second delay (allow server to fully initialize)
+setTimeout(() => {
+  poolBlockchainMonitor.startMonitoring().catch(console.error);
+}, 10000);
+
+// Initialize WebSocket notifications
+const notificationService = require('./services/notificationService');
+notificationService.initialize(io);
+
 // Public routes (no authentication required)
 app.use('/api/auth', authRoutes);
 app.use('/api/receipts', require('./routes/receipts'));
+app.use('/api/prices', require('./routes/prices')); // Crypto & gold prices
+app.use('/api/password-reset', require('./routes/password-reset'));
 
-// Protected routes (authentication required)
+// Protected user routes (authentication required)
+app.use('/api/wallet', authRoutes.authenticateToken, require('./routes/wallet'));
+app.use('/api/securities', authRoutes.authenticateToken, require('./routes/securities'));
+app.use('/api/exchange', authRoutes.authenticateToken, require('./routes/exchange'));
+app.use('/api/gold-exchange', authRoutes.authenticateToken, require('./routes/gold-exchange'));
+app.use('/api/skrs', authRoutes.authenticateToken, require('./routes/skrs'));
+app.use('/api/exports', authRoutes.authenticateToken, require('./routes/exports'));
+
+// Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));
+app.use('/api/admin/crypto', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin-crypto'));
+app.use('/api/admin/withdrawals', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin-withdrawals'));
+app.use('/api/admin/pool', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin-pool'));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
@@ -121,11 +163,14 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Backend server running on port ${PORT}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
   console.log(`💚 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔌 WebSocket server: ws://localhost:${PORT}`);
   console.log(`🔑 Default admin credentials: admin@uobsecurity.com / admin123`);
   console.log(`🌐 CORS enabled for: ${process.env.ALLOWED_ORIGINS || 'http://localhost:3000'}`);
   console.log(`💾 Database: PostgreSQL`);
+  console.log(`🛡️ Rate limiting: Enabled`);
+  console.log(`📧 Email notifications: ${process.env.SMTP_HOST ? 'Enabled' : 'Using Ethereal (test mode)'}`);
 });

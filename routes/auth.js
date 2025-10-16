@@ -171,6 +171,34 @@ router.post('/logout', (req, res) => {
     });
 });
 
+// Get current user info (alias for /profile)
+router.get('/me', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+
+        res.json({
+            id: user.id,
+            fullName: user.full_name,
+            email: user.email,
+            role: user.role,
+            createdAt: user.created_at,
+            lastLogin: user.last_login
+        });
+
+    } catch (error) {
+        console.error('User info error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
 // Get current user profile
 router.get('/profile', authenticateToken, async (req, res) => {
     try {
