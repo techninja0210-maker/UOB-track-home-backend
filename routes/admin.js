@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../config/database');
+const poolWalletService = require('../services/poolWalletService');
 const Receipt = require('../models/Receipt');
 const User = require('../models/User');
 
@@ -161,6 +162,22 @@ router.get('/receipts/:id', async (req, res) => {
   } catch (error) {
     console.error('Get receipt error:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+// Save/override pool address (admin manual)
+router.post('/pool-address', async (req, res) => {
+  try {
+    const { currency, address } = req.body || {};
+    if (!currency || !address) {
+      return res.status(400).json({ message: 'currency and address are required' });
+    }
+    await poolWalletService.setPoolAddress(currency, address);
+    const addresses = poolWalletService.getPoolAddresses();
+    return res.json({ message: 'Pool address saved', addresses });
+  } catch (error) {
+    console.error('Save pool address error:', error);
+    return res.status(400).json({ message: error.message || 'Failed to save pool address' });
   }
 });
 

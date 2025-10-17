@@ -94,6 +94,30 @@ class PoolWalletService {
   }
 
   /**
+   * Manually set/override a pool address (admin action)
+   */
+  async setPoolAddress(currency, address) {
+    await this.initializePoolWallets();
+    const cur = (currency || '').toLowerCase();
+    if (!['btc', 'eth', 'usdt'].includes(cur)) {
+      throw new Error('Unsupported currency');
+    }
+    // Basic format validation
+    if (cur === 'eth' || cur === 'usdt') {
+      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+        throw new Error('Invalid EVM address format');
+      }
+    } else if (cur === 'btc') {
+      // Very light validation for base58/bech32 (starts with 1,3,bc1)
+      if (!/^([13][a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[0-9a-zA-Z]{11,71})$/.test(address)) {
+        throw new Error('Invalid BTC address format');
+      }
+    }
+    this.poolAddresses[cur] = address;
+    return this.poolAddresses;
+  }
+
+  /**
    * Get decrypted private key for signing transactions
    */
   async getPoolPrivateKey(currency) {
