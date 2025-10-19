@@ -51,6 +51,13 @@ pool.query('SELECT NOW()', (err, res) => {
   }
 });
 
+// Initialize pool wallets
+const poolWalletService = require('./services/poolWalletService');
+poolWalletService.initializePoolWallets().catch(err => {
+  console.error('❌ Pool wallet initialization error:', err);
+  // Don't exit - server can still run without pool wallets
+});
+
 // Authentication middleware
 const authRoutes = require('./routes/auth');
 

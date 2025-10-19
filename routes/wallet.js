@@ -87,7 +87,7 @@ router.get('/pool-address/:currency', async (req, res) => {
 
     await poolWalletService.initializePoolWallets();
     const poolAddresses = poolWalletService.getPoolAddresses();
-    const address = poolAddresses[currency.toLowerCase()];
+    const address = poolAddresses[currency.toUpperCase()];
 
     if (!address) {
       return res.status(500).json({ message: 'Pool address unavailable' });

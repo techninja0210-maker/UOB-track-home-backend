@@ -1,3 +1,4 @@
+require('dotenv').config();
 const bitcoin = require('bitcoinjs-lib');
 const { BIP32Factory } = require('bip32');
 const bip39 = require('bip39');
@@ -36,6 +37,26 @@ class PoolWalletService {
     try {
       console.log('🏦 Initializing pool wallet addresses...');
       
+      // First, check if pool addresses already exist in database
+      const { query } = require('../config/database');
+      const existingAddresses = await query(`
+        SELECT currency, address FROM pool_addresses 
+        WHERE address IS NOT NULL AND address != ''
+      `);
+      
+      if (existingAddresses.rows.length > 0) {
+        console.log('📋 Found existing pool addresses in database:');
+        this.poolAddresses = {};
+        existingAddresses.rows.forEach(row => {
+          this.poolAddresses[row.currency] = row.address;
+          console.log(`   ${row.currency}: ${row.address}`);
+        });
+        console.log('✅ Using existing pool addresses from database');
+        return this.poolAddresses;
+      }
+      
+      console.log('🔄 No existing pool addresses found, generating new ones...');
+      
       // Generate seed from mnemonic
       const seed = await bip39.mnemonicToSeed(this.masterSeed);
       const root = bip32.fromSeed(seed, bitcoin.networks.bitcoin);
@@ -61,9 +82,9 @@ class PoolWalletService {
       
       // Store pool addresses and encrypted private keys
       this.poolAddresses = {
-        btc: btcAddress,
-        eth: ethAddress,
-        usdt: ethAddress  // USDT uses same address as ETH (ERC-20)
+        BTC: btcAddress,
+        ETH: ethAddress,
+        USDT: ethAddress  // USDT uses same address as ETH (ERC-20)
       };
       
       this.poolPrivateKeys = {
@@ -75,6 +96,22 @@ class PoolWalletService {
       console.log('✅ Pool wallet addresses initialized:');
       console.log(`   BTC: ${btcAddress}`);
       console.log(`   ETH/USDT: ${ethAddress}`);
+      
+      // Save pool addresses to database
+      await query(`
+        INSERT INTO pool_addresses (currency, address, verified, verified_at)
+        VALUES 
+          ('BTC', $1, true, NOW()),
+          ('ETH', $2, true, NOW()),
+          ('USDT', $3, true, NOW())
+        ON CONFLICT (currency) 
+        DO UPDATE SET 
+          address = EXCLUDED.address,
+          verified = EXCLUDED.verified,
+          verified_at = EXCLUDED.verified_at
+      `, [btcAddress, ethAddress, ethAddress]);
+      
+      console.log('💾 Pool addresses saved to database');
       
       return this.poolAddresses;
     } catch (error) {
@@ -95,6 +132,8 @@ class PoolWalletService {
 
   /**
    * Manually set/override a pool address (admin action)
+   * NOTE: This is now deprecated in favor of automatic generation
+   * Kept for backward compatibility but not recommended
    */
   async setPoolAddress(currency, address) {
     await this.initializePoolWallets();
@@ -113,6 +152,7 @@ class PoolWalletService {
         throw new Error('Invalid BTC address format');
       }
     }
+    console.warn(`⚠️ Manual pool address override for ${currency}. Consider using automatic generation instead.`);
     this.poolAddresses[cur] = address;
     return this.poolAddresses;
   }
@@ -208,25 +248,69 @@ class PoolWalletService {
   async getPoolBalances() {
     const addresses = await this.getPoolAddresses();
     
-    // This would typically query blockchain APIs to get actual balances
-    // For now, return placeholder structure
-    return {
-      btc: {
-        address: addresses.btc,
-        balance: 0, // Would query Bitcoin API
-        pending: 0
-      },
-      eth: {
-        address: addresses.eth,
-        balance: 0, // Would query Ethereum API
-        pending: 0
-      },
-      usdt: {
-        address: addresses.usdt,
-        balance: 0, // Would query USDT contract
-        pending: 0
-      }
-    };
+    try {
+      // Use Sepolia testnet RPC (fallback if ETH_RPC_URL is not set or invalid)
+      const rpcUrl = process.env.ETH_RPC_URL || 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      
+      // Get ETH balance
+      const ethBalance = await provider.getBalance(addresses.ETH);
+      const ethBalanceFormatted = parseFloat(ethers.formatEther(ethBalance));
+      
+      // Get USDT balance (ERC-20) - Use Sepolia testnet USDT contract
+      const usdtContractAddress = '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06'; // Sepolia USDT
+      const usdtAbi = ["function balanceOf(address owner) view returns (uint256)"];
+      const usdtContract = new ethers.Contract(usdtContractAddress, usdtAbi, provider);
+      const usdtBalance = await usdtContract.balanceOf(addresses.USDT);
+      const usdtBalanceFormatted = parseFloat(ethers.formatUnits(usdtBalance, 6)); // USDT has 6 decimals
+      
+      // For BTC, we'd need a Bitcoin API - for now return 0
+      // In production, you'd use a service like BlockCypher, Blockstream, or your own Bitcoin node
+      const btcBalance = 0; // TODO: Implement Bitcoin balance checking
+      
+      console.log('✅ Pool balances fetched successfully:');
+      console.log(`   ETH: ${ethBalanceFormatted} ETH`);
+      console.log(`   USDT: ${usdtBalanceFormatted} USDT`);
+      console.log(`   BTC: ${btcBalance} BTC (not implemented)`);
+      
+      return {
+        BTC: {
+          address: addresses.BTC,
+          balance: btcBalance,
+          pending: 0
+        },
+        ETH: {
+          address: addresses.ETH,
+          balance: ethBalanceFormatted,
+          pending: 0
+        },
+        USDT: {
+          address: addresses.USDT,
+          balance: usdtBalanceFormatted,
+          pending: 0
+        }
+      };
+    } catch (error) {
+      console.error('❌ Error fetching pool balances:', error.message);
+      // Return zero balances on error
+      return {
+        BTC: {
+          address: addresses.BTC,
+          balance: 0,
+          pending: 0
+        },
+        ETH: {
+          address: addresses.ETH,
+          balance: 0,
+          pending: 0
+        },
+        USDT: {
+          address: addresses.USDT,
+          balance: 0,
+          pending: 0
+        }
+      };
+    }
   }
 
   /**

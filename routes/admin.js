@@ -497,4 +497,131 @@ router.get('/recent-activities', async (req, res) => {
   }
 });
 
+// Get pool wallet balances and addresses
+router.get('/pool-wallets', async (req, res) => {
+  try {
+    const balances = await poolWalletService.getPoolBalances();
+    const addresses = poolWalletService.getPoolAddresses();
+    
+    const poolWallets = [
+      {
+        currency: 'BTC',
+        address: addresses.BTC,
+        balance: balances.BTC.balance,
+        pending: balances.BTC.pending
+      },
+      {
+        currency: 'ETH',
+        address: addresses.ETH,
+        balance: balances.ETH.balance,
+        pending: balances.ETH.pending
+      },
+      {
+        currency: 'USDT',
+        address: addresses.USDT,
+        balance: balances.USDT.balance,
+        pending: balances.USDT.pending
+      }
+    ];
+    
+    res.json(poolWallets);
+  } catch (error) {
+    console.error('Get pool wallets error:', error);
+    res.status(500).json({ message: 'Failed to get pool wallet data' });
+  }
+});
+
+// Get pending withdrawal requests
+router.get('/withdrawal-requests', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT 
+        w.id,
+        w.user_id as "userId",
+        w.currency,
+        w.amount,
+        w.to_address as "toAddress",
+        w.status,
+        w.created_at as "createdAt"
+      FROM withdrawals w
+      WHERE w.status = 'pending'
+      ORDER BY w.created_at DESC
+    `);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get withdrawal requests error:', error);
+    res.status(500).json({ message: 'Failed to get withdrawal requests' });
+  }
+});
+
+// Process admin withdrawal from pool wallet
+router.post('/pool-withdrawal', async (req, res) => {
+  try {
+    const { currency, amount, toAddress } = req.body;
+    
+    if (!currency || !amount || !toAddress) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+    
+    // Send from pool wallet
+    const txHash = await poolWalletService.sendFromPool(currency, toAddress, amount);
+    
+    res.json({ 
+      message: 'Withdrawal processed successfully',
+      txHash: txHash
+    });
+  } catch (error) {
+    console.error('Pool withdrawal error:', error);
+    res.status(500).json({ message: 'Failed to process withdrawal' });
+  }
+});
+
+// Approve user withdrawal request
+router.post('/approve-withdrawal/:requestId', async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    
+    // Get withdrawal request details
+    const result = await query(`
+      SELECT * FROM withdrawals WHERE id = $1 AND status = 'pending'
+    `, [requestId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Withdrawal request not found' });
+    }
+    
+    const withdrawal = result.rows[0];
+    
+    // Send from pool wallet
+    const txHash = await poolWalletService.sendFromPool(
+      withdrawal.currency,
+      withdrawal.to_address,
+      withdrawal.amount
+    );
+    
+    // Update withdrawal status
+    await query(`
+      UPDATE withdrawals 
+      SET status = 'completed', tx_hash = $1, completed_at = now()
+      WHERE id = $2
+    `, [txHash, requestId]);
+    
+    // Deduct from user balance
+    await query(`
+      UPDATE user_balances 
+      SET balance = balance - $1, available_balance = available_balance - $1
+      WHERE user_id = $2 AND currency = $3
+    `, [withdrawal.amount, withdrawal.user_id, withdrawal.currency]);
+    
+    res.json({ 
+      message: 'Withdrawal approved and processed',
+      txHash: txHash
+    });
+  } catch (error) {
+    console.error('Approve withdrawal error:', error);
+    res.status(500).json({ message: 'Failed to approve withdrawal' });
+  }
+});
+
 module.exports = router;
