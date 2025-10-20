@@ -24,19 +24,21 @@ router.post('/crypto-to-gold', auth.authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid crypto currency or amount' });
     }
 
-    // Get user's wallet
-    const wallet = await Wallet.findByUserId(userId);
-    if (!wallet) {
-      return res.status(404).json({ message: 'Wallet not found' });
+    // Check platform balance from user_balances (off-chain credits)
+    const upperSymbol = (cryptoCurrency || '').toUpperCase();
+    if (!['BTC', 'ETH', 'USDT'].includes(upperSymbol)) {
+      return res.status(400).json({ message: `Unsupported crypto currency: ${cryptoCurrency}` });
     }
 
-    // Check crypto balance
-    const cryptoBalanceColumn = `${cryptoCurrency.toLowerCase()}_balance`;
-    const cryptoBalance = parseFloat(wallet[cryptoBalanceColumn] || 0);
+    const balanceResult = await query(
+      `SELECT balance FROM user_balances WHERE user_id = $1 AND currency = $2`,
+      [userId, upperSymbol]
+    );
+    const cryptoBalance = parseFloat(balanceResult.rows[0]?.balance || 0);
 
     if (cryptoBalance < cryptoAmount) {
-      return res.status(400).json({ 
-        message: `Insufficient ${cryptoCurrency} balance`,
+      return res.status(400).json({
+        message: `Insufficient ${upperSymbol} balance`,
         available: cryptoBalance,
         requested: cryptoAmount
       });
@@ -44,17 +46,19 @@ router.post('/crypto-to-gold', auth.authenticateToken, async (req, res) => {
 
     // Get current prices
     const cryptoPrices = await cryptoPriceService.getCurrentPrices();
-    const upperSymbol = cryptoCurrency.toUpperCase();
     const cryptoPriceUSD =
       upperSymbol === 'BTC' ? cryptoPrices.BTC :
       upperSymbol === 'ETH' ? cryptoPrices.ETH :
       upperSymbol === 'USDT' ? cryptoPrices.USDT : undefined;
 
-    if (!cryptoPriceUSD) {
-      return res.status(400).json({ message: `Unsupported crypto currency: ${cryptoCurrency}` });
+    if (!cryptoPriceUSD || cryptoPriceUSD <= 0) {
+      return res.status(400).json({ message: `Price unavailable for ${upperSymbol}` });
     }
 
     const goldPricePerGram = await goldPriceService.getCurrentGoldPrice();
+    if (!goldPricePerGram || goldPricePerGram <= 0) {
+      return res.status(400).json({ message: 'Gold price unavailable' });
+    }
 
     // Calculate exchange
     const cryptoValueUSD = cryptoAmount * cryptoPriceUSD;
@@ -65,59 +69,70 @@ router.post('/crypto-to-gold', auth.authenticateToken, async (req, res) => {
     const fee = goldGrams * feeRate;
     const netGoldGrams = goldGrams - fee;
 
-    // Deduct crypto from wallet
+    // Ensure balance row exists then deduct crypto from user_balances
     await client.query(
-      `UPDATE wallets SET ${cryptoBalanceColumn} = ${cryptoBalanceColumn} - $1 WHERE user_id = $2`,
-      [cryptoAmount, userId]
+      `INSERT INTO user_balances (user_id, currency, balance, available_balance, updated_at)
+       VALUES ($1, $2, 0, 0, NOW())
+       ON CONFLICT (user_id, currency) DO NOTHING`,
+      [userId, upperSymbol]
     );
 
-    // Add gold credits (stored in gold_holdings table)
+    const updateResult = await client.query(
+      `UPDATE user_balances 
+       SET balance = balance - $1, available_balance = available_balance - $1, updated_at = NOW()
+       WHERE user_id = $2 AND currency = $3`,
+      [cryptoAmount, userId, upperSymbol]
+    );
+
+    if ((updateResult.rowCount || 0) === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Failed to debit balance' });
+    }
+
+    // Add gold credits (stored in gold_holdings table) - align with live schema requiring skr_reference
+    const feeUsd = fee * goldPricePerGram;
+    const totalPaidUsd = cryptoValueUSD - feeUsd;
+    const GoldHoldingModel = require('../models/GoldHolding');
+    const skrReference = (GoldHoldingModel && GoldHoldingModel.generateSKRReference)
+      ? GoldHoldingModel.generateSKRReference()
+      : `SKR-${Date.now()}`;
+
     const goldHolding = await client.query(
       `INSERT INTO gold_holdings (
-        user_id, 
-        weight_grams, 
-        purchase_price_per_gram, 
-        total_value_usd,
-        source_crypto,
-        source_crypto_amount,
-        fee_grams,
-        status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+        user_id, gold_security_id, skr_reference, quantity, weight_grams,
+        purchase_price_per_gram, total_paid_usd, payment_currency, payment_amount, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'holding')
       RETURNING *`,
       [
         userId,
+        null, // gold_security_id not applicable for simple exchange
+        skrReference,
+        1, // quantity unit
         netGoldGrams,
         goldPricePerGram,
-        cryptoValueUSD - (fee * goldPricePerGram),
-        cryptoCurrency.toUpperCase(),
-        cryptoAmount,
-        fee
+        totalPaidUsd,
+        upperSymbol,
+        cryptoAmount
       ]
     );
 
-    // Create transaction record
+    // Create transaction record (ledger) using meta JSON
     await client.query(
-      `INSERT INTO transactions (
-        user_id,
-        type,
-        from_currency,
-        from_amount,
-        to_currency,
-        to_amount,
-        exchange_rate,
-        fee_amount,
-        status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO transactions_ledger (
+        user_id, type, currency, amount, reference_id, meta, created_at
+      ) VALUES ($1, 'buy_gold', $2, $3, $4, $5, NOW())`,
       [
         userId,
-        'crypto_to_gold',
-        cryptoCurrency.toUpperCase(),
+        upperSymbol,
         cryptoAmount,
-        'GOLD',
-        netGoldGrams,
-        goldPricePerGram / cryptoPriceUSD,
-        fee,
-        'completed'
+        `buy_${Date.now()}`,
+        JSON.stringify({
+          description: `Bought ${netGoldGrams.toFixed(6)} g gold with ${cryptoAmount} ${upperSymbol}`,
+          status: 'completed',
+          goldGramsNet: netGoldGrams,
+          goldPricePerGram,
+          cryptoPriceUSD
+        })
       ]
     );
 
@@ -166,10 +181,10 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid crypto currency or gold amount' });
     }
 
-    // Get user's total gold holdings
+    // Get user's total gold holdings (status 'holding')
     const holdingsResult = await client.query(
       `SELECT SUM(weight_grams) as total_gold FROM gold_holdings 
-       WHERE user_id = $1 AND status = 'active'`,
+       WHERE user_id = $1 AND status = 'holding'`,
       [userId]
     );
 
@@ -210,7 +225,7 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
     let remainingGold = goldGrams;
     const holdings = await client.query(
       `SELECT * FROM gold_holdings 
-       WHERE user_id = $1 AND status = 'active' 
+       WHERE user_id = $1 AND status = 'holding' 
        ORDER BY created_at ASC`,
       [userId]
     );
@@ -218,19 +233,19 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
     for (const holding of holdings.rows) {
       if (remainingGold <= 0) break;
 
-      const deductAmount = Math.min(remainingGold, holding.weight_grams);
+      const deductAmount = Math.min(remainingGold, parseFloat(holding.weight_grams));
       
-      if (deductAmount >= holding.weight_grams) {
-        // Fully consume this holding
+      if (deductAmount >= parseFloat(holding.weight_grams)) {
+        // Fully consume this holding -> mark as sold
         await client.query(
-          `UPDATE gold_holdings SET status = 'redeemed', redeemed_at = CURRENT_TIMESTAMP 
+          `UPDATE gold_holdings SET status = 'sold', updated_at = CURRENT_TIMESTAMP 
            WHERE id = $1`,
           [holding.id]
         );
       } else {
         // Partially consume this holding
         await client.query(
-          `UPDATE gold_holdings SET weight_grams = weight_grams - $1 
+          `UPDATE gold_holdings SET weight_grams = weight_grams - $1, updated_at = CURRENT_TIMESTAMP 
            WHERE id = $2`,
           [deductAmount, holding.id]
         );
@@ -239,36 +254,32 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
       remainingGold -= deductAmount;
     }
 
-    // Add crypto to wallet
-    const cryptoBalanceColumn = `${cryptoCurrency.toLowerCase()}_balance`;
+    // Add crypto to user_balances
     await client.query(
-      `UPDATE wallets SET ${cryptoBalanceColumn} = ${cryptoBalanceColumn} + $1 WHERE user_id = $2`,
-      [netCryptoAmount, userId]
+      `INSERT INTO user_balances (user_id, currency, balance, available_balance, updated_at)
+       VALUES ($1, $2, $3, $3, NOW())
+       ON CONFLICT (user_id, currency)
+       DO UPDATE SET balance = user_balances.balance + $3, available_balance = user_balances.available_balance + $3, updated_at = NOW()`,
+      [userId, upperSymbol, netCryptoAmount]
     );
 
-    // Create transaction record
+    // Create transaction record (ledger) using meta JSON
     await client.query(
-      `INSERT INTO transactions (
-        user_id,
-        type,
-        from_currency,
-        from_amount,
-        to_currency,
-        to_amount,
-        exchange_rate,
-        fee_amount,
-        status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO transactions_ledger (
+        user_id, type, currency, amount, reference_id, meta, created_at
+      ) VALUES ($1, 'sell_gold', $2, $3, $4, $5, NOW())`,
       [
         userId,
-        'gold_to_crypto',
-        'GOLD',
-        goldGrams,
-        cryptoCurrency.toUpperCase(),
+        upperSymbol,
         netCryptoAmount,
-        cryptoPriceUSD / goldPricePerGram,
-        fee,
-        'completed'
+        `sell_${Date.now()}`,
+        JSON.stringify({
+          description: `Sold ${goldGrams.toFixed(6)} g gold for ${netCryptoAmount.toFixed(8)} ${upperSymbol}`,
+          status: 'completed',
+          goldGrams,
+          goldPricePerGram,
+          cryptoPriceUSD
+        })
       ]
     );
 
@@ -313,9 +324,10 @@ router.get('/holdings', auth.authenticateToken, async (req, res) => {
       [userId]
     );
 
+    // Count both legacy 'active' and new 'holding' statuses
     const totalActive = await query(
-      `SELECT SUM(weight_grams) as total FROM gold_holdings 
-       WHERE user_id = $1 AND status = 'active'`,
+      `SELECT COALESCE(SUM(weight_grams), 0) as total FROM gold_holdings 
+       WHERE user_id = $1 AND status IN ('active','holding')`,
       [userId]
     );
 

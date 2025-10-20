@@ -72,8 +72,14 @@ router.get('/skrs/csv', auth.authenticateToken, async (req, res) => {
 router.get('/transactions/pdf', auth.authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = req.user;
     
+    // Fetch full user data from database
+    const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
     const filters = {
       startDate: req.query.startDate,
       endDate: req.query.endDate,
@@ -81,7 +87,7 @@ router.get('/transactions/pdf', auth.authenticateToken, async (req, res) => {
 
     const pdfBuffer = await exportService.generateTransactionsPDF(
       userId,
-      user.fullName,
+      user.full_name,
       user.email,
       filters
     );
@@ -91,7 +97,8 @@ router.get('/transactions/pdf', auth.authenticateToken, async (req, res) => {
     res.send(pdfBuffer);
   } catch (error) {
     console.error('Transaction PDF export error:', error);
-    res.status(500).json({ message: 'Failed to generate PDF report' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: 'Failed to generate PDF report', error: error.message });
   }
 });
 
@@ -102,11 +109,18 @@ router.get('/transactions/pdf', auth.authenticateToken, async (req, res) => {
 router.get('/gold-holdings/pdf', auth.authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = req.user;
+    
+    // Fetch full user data from database
+    const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
 
     const pdfBuffer = await exportService.generateGoldHoldingsPDF(
       userId,
-      user.fullName,
+      user.full_name,
       user.email
     );
 
@@ -116,6 +130,72 @@ router.get('/gold-holdings/pdf', auth.authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Gold holdings PDF export error:', error);
     res.status(500).json({ message: 'Failed to generate PDF report' });
+  }
+});
+
+/**
+ * Export individual SKR to PDF
+ * GET /api/exports/skrs/:skrId/pdf
+ */
+router.get('/skrs/:skrId/pdf', auth.authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const skrId = req.params.skrId;
+    
+    // Fetch full user data from database
+    const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
+
+    console.log('Individual SKR PDF request:', { userId, skrId, userEmail: user.email });
+
+    const pdfBuffer = await exportService.generateIndividualSKRPDF(
+      userId,
+      user.full_name,
+      user.email,
+      skrId
+    );
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="skr_${skrId}_${Date.now()}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Individual SKR PDF export error:', error);
+    res.status(500).json({ message: 'Failed to generate individual SKR PDF', error: error.message });
+  }
+});
+
+/**
+ * Export SKRs to PDF
+ * GET /api/exports/skrs/pdf
+ */
+router.get('/skrs/pdf', auth.authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Fetch full user data from database
+    const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = userResult.rows[0];
+
+    const pdfBuffer = await exportService.generateSKRsPDF(
+      userId,
+      user.full_name,
+      user.email
+    );
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="skrs_report_${Date.now()}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('SKR PDF export error:', error);
+    res.status(500).json({ message: 'Failed to generate SKR PDF report' });
   }
 });
 

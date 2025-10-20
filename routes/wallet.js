@@ -77,6 +77,57 @@ router.get('/balance', async (req, res) => {
   }
 });
 
+// User platform balances endpoint (for main dashboard)
+router.get('/balances', async (req, res) => {
+  try {
+    // Get user's platform balances from user_balances table
+    const result = await query(`
+      SELECT currency, balance, available_balance 
+      FROM user_balances 
+      WHERE user_id = $1
+    `, [req.user.id]);
+
+    // Initialize with default values
+    const balances = {
+      BTC: 0,
+      ETH: 0,
+      USDT: 0
+    };
+
+    // Update with actual balances from database
+    result.rows.forEach(row => {
+      if (balances.hasOwnProperty(row.currency)) {
+        balances[row.currency] = parseFloat(row.balance);
+      }
+    });
+
+    // Return in the format expected by frontend
+    res.json([
+      {
+        currency: 'BTC',
+        balance: balances.BTC,
+        symbol: '₿',
+        valueUsd: 0 // Will be calculated on frontend with real-time prices
+      },
+      {
+        currency: 'ETH',
+        balance: balances.ETH,
+        symbol: 'Ξ',
+        valueUsd: 0 // Will be calculated on frontend with real-time prices
+      },
+      {
+        currency: 'USDT',
+        balance: balances.USDT,
+        symbol: '₮',
+        valueUsd: 0 // Will be calculated on frontend with real-time prices
+      }
+    ]);
+  } catch (error) {
+    console.error('Get user balances error:', error);
+    res.status(500).json({ message: 'Failed to fetch user balances' });
+  }
+});
+
 // Get pool wallet address for a given currency (for direct MetaMask deposits)
 router.get('/pool-address/:currency', async (req, res) => {
   try {
@@ -139,32 +190,118 @@ router.post('/deposit-intent', async (req, res) => {
   }
 });
 
-// Get wallet transactions
+// Process MetaMask deposit (automatic crediting)
+router.post('/process-deposit', async (req, res) => {
+  try {
+    const { currency, amount, transactionHash, fromAddress } = req.body;
+    
+    console.log('🔄 Processing deposit request:', {
+      userId: req.user.id,
+      currency,
+      amount,
+      transactionHash,
+      fromAddress
+    });
+
+    if (!['BTC', 'ETH', 'USDT'].includes((currency || '').toUpperCase())) {
+      return res.status(400).json({ message: 'Invalid currency' });
+    }
+    
+    const numericAmount = parseFloat(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ message: 'Invalid amount' });
+    }
+
+    if (!transactionHash) {
+      return res.status(400).json({ message: 'Transaction hash is required' });
+    }
+
+    // Get pool address for this currency
+    await poolWalletService.initializePoolWallets();
+    const poolAddresses = poolWalletService.getPoolAddresses();
+    const poolAddress = poolAddresses[currency.toUpperCase()];
+
+    if (!poolAddress) {
+      return res.status(500).json({ message: 'Pool address not available' });
+    }
+
+    console.log('📋 Pool address found:', poolAddress);
+
+    // Import userBalanceService
+    const userBalanceService = require('../services/userBalanceService');
+    
+    // Process the deposit (automatically credit user balance)
+    const result = await userBalanceService.processMetaMaskDeposit(
+      req.user.id,
+      currency.toUpperCase(),
+      numericAmount,
+      transactionHash,
+      poolAddress,
+      fromAddress
+    );
+
+    if (result.success) {
+      // Update deposit request status
+      await query(
+        `UPDATE deposit_requests 
+         SET status = 'completed', transaction_hash = $1, completed_at = NOW()
+         WHERE user_id = $2 AND currency = $3 AND amount = $4 AND status = 'pending'
+         ORDER BY created_at DESC LIMIT 1`,
+        [transactionHash, req.user.id, currency.toUpperCase(), numericAmount]
+      );
+
+      return res.status(200).json({
+        message: 'Deposit processed successfully',
+        newBalance: result.newBalance,
+        amount: result.amount,
+        currency: result.currency
+      });
+    } else {
+      return res.status(400).json({ message: result.message });
+    }
+
+  } catch (error) {
+    console.error('❌ Process deposit error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: 'Failed to process deposit', error: error.message });
+  }
+});
+
+// Get wallet transactions (from transactions_ledger table)
 router.get('/transactions', async (req, res) => {
   try {
     const { type, status, limit = 50 } = req.query;
     
-    const transactions = await Transaction.findByUserId(req.user.id, {
-      type,
-      status,
-      limit: parseInt(limit)
-    });
+    // Import userBalanceService to get transaction history
+    const userBalanceService = require('../services/userBalanceService');
+    
+    // Get user transaction history
+    const transactions = await userBalanceService.getUserTransactionHistory(req.user.id, parseInt(limit));
+    
+    // Filter by type and status if provided
+    let filteredTransactions = transactions;
+    
+    if (type && type !== 'all') {
+      filteredTransactions = filteredTransactions.filter(tx => tx.type === type);
+    }
+    
+    if (status && status !== 'all') {
+      filteredTransactions = filteredTransactions.filter(tx => tx.status === status);
+    }
 
-    const formatted = transactions.map(tx => ({
+    // Format the transactions for the frontend
+    const formatted = filteredTransactions.map(tx => ({
       id: tx.id,
       type: tx.type,
-      fromCurrency: tx.from_currency,
-      toCurrency: tx.to_currency,
-      fromAmount: parseFloat(tx.from_amount),
-      toAmount: parseFloat(tx.to_amount),
-      goldName: tx.gold_name,
-      skrReference: tx.skr_reference,
-      exchangeRate: parseFloat(tx.exchange_rate),
-      fee: parseFloat(tx.total_fee),
+      amount: tx.amount,
+      currency: tx.currency,
       status: tx.status,
-      transactionHash: tx.transaction_hash,
-      createdAt: tx.created_at,
-      completedAt: tx.completed_at
+      timestamp: tx.createdAt,
+      description: tx.description,
+      transactionHash: tx.transactionHash,
+      fromAddress: tx.fromAddress,
+      toAddress: tx.toAddress,
+      referenceId: tx.referenceId
     }));
 
     res.json(formatted);
