@@ -560,20 +560,75 @@ router.post('/pool-withdrawal', async (req, res) => {
   try {
     const { currency, amount, toAddress } = req.body;
     
+    console.log('🏦 Admin withdrawal request:', { currency, amount, toAddress });
+    
+    // Validate required fields
     if (!currency || !amount || !toAddress) {
-      return res.status(400).json({ message: 'Missing required fields' });
+      return res.status(400).json({ 
+        message: 'Missing required fields: currency, amount, toAddress' 
+      });
+    }
+    
+    // Validate currency
+    if (!['BTC', 'ETH', 'USDT'].includes(currency.toUpperCase())) {
+      return res.status(400).json({ 
+        message: 'Invalid currency. Must be BTC, ETH, or USDT' 
+      });
+    }
+    
+    // Validate amount
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ 
+        message: 'Invalid amount. Must be a positive number' 
+      });
+    }
+    
+    // Validate address format (basic validation)
+    if (currency.toUpperCase() === 'BTC' && !toAddress.match(/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/)) {
+      return res.status(400).json({ 
+        message: 'Invalid Bitcoin address format' 
+      });
+    }
+    
+    if (['ETH', 'USDT'].includes(currency.toUpperCase()) && !toAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
+      return res.status(400).json({ 
+        message: 'Invalid Ethereum address format' 
+      });
     }
     
     // Send from pool wallet
-    const txHash = await poolWalletService.sendFromPool(currency, toAddress, amount);
+    const txHash = await poolWalletService.sendFromPool(currency, toAddress, numericAmount);
+    
+    console.log('✅ Admin withdrawal successful:', txHash);
     
     res.json({ 
       message: 'Withdrawal processed successfully',
-      txHash: txHash
+      txHash: txHash,
+      currency: currency.toUpperCase(),
+      amount: numericAmount,
+      toAddress: toAddress
     });
   } catch (error) {
-    console.error('Pool withdrawal error:', error);
-    res.status(500).json({ message: 'Failed to process withdrawal' });
+    console.error('❌ Pool withdrawal error:', error);
+    
+    // Provide specific error messages
+    let errorMessage = 'Failed to process withdrawal';
+    
+    if (error.message.includes('Insufficient pool balance')) {
+      errorMessage = error.message;
+    } else if (error.message.includes('Failed to send')) {
+      errorMessage = error.message;
+    } else if (error.message.includes('Missing required parameters')) {
+      errorMessage = error.message;
+    } else if (error.message.includes('Unsupported currency')) {
+      errorMessage = error.message;
+    }
+    
+    res.status(500).json({ 
+      message: errorMessage,
+      error: error.message 
+    });
   }
 });
 

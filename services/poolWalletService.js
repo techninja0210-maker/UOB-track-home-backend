@@ -52,6 +52,10 @@ class PoolWalletService {
           console.log(`   ${row.currency}: ${row.address}`);
         });
         console.log('✅ Using existing pool addresses from database');
+        
+        // Generate private keys for existing addresses (they should be deterministic)
+        await this.generatePoolPrivateKeys();
+        
         return this.poolAddresses;
       }
       
@@ -158,6 +162,121 @@ class PoolWalletService {
   }
 
   /**
+   * Generate private keys for existing pool addresses (deterministic)
+   */
+  async generatePoolPrivateKeys() {
+    try {
+      console.log('🔑 Generating private keys for existing pool addresses...');
+      
+      // Generate seed from mnemonic
+      const seed = await bip39.mnemonicToSeed(this.masterSeed);
+      const root = bip32.fromSeed(seed, bitcoin.networks.bitcoin);
+      
+      // Pool wallet derivation paths (same as in initializePoolWallets)
+      const btcPath = `m/44'/0'/0'/0/0`;  // First pool wallet
+      const ethPath = `m/44'/60'/0'/0/0`;  // First pool wallet for ETH
+      
+      // Generate BTC private key
+      const btcChild = root.derivePath(btcPath);
+      const btcPrivateKey = btcChild.toWIF();
+      
+      // Generate ETH private key
+      const ethChild = root.derivePath(ethPath);
+      const ethPrivateKeyHex = ethChild.privateKey.toString('hex');
+      const ethWallet = new ethers.Wallet(ethPrivateKeyHex);
+      const ethPrivateKey = ethWallet.privateKey;
+      
+      // Verify that generated addresses match database addresses
+      const generatedBtcAddress = bitcoin.payments.p2pkh({
+        pubkey: btcChild.publicKey,
+        network: bitcoin.networks.bitcoin
+      }).address;
+      
+      const generatedEthAddress = ethWallet.address;
+      
+      console.log('🔍 Address verification:');
+      console.log('Generated BTC:', generatedBtcAddress);
+      console.log('Database BTC:', this.poolAddresses.BTC);
+      console.log('Generated ETH:', generatedEthAddress);
+      console.log('Database ETH:', this.poolAddresses.ETH);
+      
+      if (generatedBtcAddress !== this.poolAddresses.BTC) {
+        console.warn('⚠️ Generated BTC address does not match database address');
+        console.log('💡 BTC withdrawals will not work until private key is manually set');
+      }
+      
+      if (generatedEthAddress !== this.poolAddresses.ETH) {
+        console.warn('⚠️ Generated ETH address does not match database address');
+        console.log('🔄 This means the database address was manually set or from a different seed');
+        console.log('💡 ETH/USDT withdrawals will not work until private key is manually set');
+        console.log('💡 To fix: Set the private key for the existing address manually');
+      }
+      
+      // Store encrypted private keys (even if they don't match - for future use)
+      this.poolPrivateKeys = {
+        btc: this.encrypt(btcPrivateKey),
+        eth: this.encrypt(ethPrivateKey),
+        usdt: this.encrypt(ethPrivateKey)  // Same private key for USDT
+      };
+      
+      console.log('✅ Private keys generated and encrypted');
+      console.log('⚠️  Note: Private keys may not match existing addresses - manual setup required');
+    } catch (error) {
+      console.error('❌ Error generating private keys:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Manually set private key for an existing pool address
+   * This is needed when the address was created outside the deterministic system
+   */
+  async setPoolPrivateKey(currency, privateKey) {
+    try {
+      console.log(`🔑 Setting manual private key for ${currency}...`);
+      
+      // Validate the private key matches the address
+      const address = this.poolAddresses[currency.toUpperCase()];
+      if (!address) {
+        throw new Error(`No address found for currency: ${currency}`);
+      }
+      
+      if (currency.toLowerCase() === 'eth' || currency.toLowerCase() === 'usdt') {
+        // For ETH/USDT, validate the private key generates the correct address
+        const wallet = new ethers.Wallet(privateKey);
+        if (wallet.address.toLowerCase() !== address.toLowerCase()) {
+          throw new Error(`Private key does not match ${currency} address. Expected: ${address}, Got: ${wallet.address}`);
+        }
+        console.log(`✅ ETH private key validated for address: ${wallet.address}`);
+      } else if (currency.toLowerCase() === 'btc') {
+        // For BTC, validate the private key generates the correct address
+        const keyPair = bitcoin.ECPair.fromWIF(privateKey);
+        const btcAddress = bitcoin.payments.p2pkh({
+          pubkey: keyPair.publicKey,
+          network: bitcoin.networks.bitcoin
+        }).address;
+        if (btcAddress !== address) {
+          throw new Error(`Private key does not match BTC address. Expected: ${address}, Got: ${btcAddress}`);
+        }
+        console.log(`✅ BTC private key validated for address: ${btcAddress}`);
+      }
+      
+      // Store the encrypted private key
+      if (!this.poolPrivateKeys) {
+        this.poolPrivateKeys = {};
+      }
+      
+      this.poolPrivateKeys[currency.toLowerCase()] = this.encrypt(privateKey);
+      
+      console.log(`✅ Private key set and encrypted for ${currency}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error setting private key for ${currency}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get decrypted private key for signing transactions
    */
   async getPoolPrivateKey(currency) {
@@ -167,10 +286,24 @@ class PoolWalletService {
     
     const encryptedKey = this.poolPrivateKeys[currency.toLowerCase()];
     if (!encryptedKey) {
-      throw new Error(`No private key found for currency: ${currency}`);
+      throw new Error(`No private key found for currency: ${currency}. Use setPoolPrivateKey() to set it manually.`);
     }
     
-    return this.decrypt(encryptedKey);
+    const privateKey = this.decrypt(encryptedKey);
+    
+    // Verify the private key matches the database address
+    const databaseAddress = this.poolAddresses[currency.toUpperCase()];
+    if (currency.toLowerCase() === 'eth' || currency.toLowerCase() === 'usdt') {
+      const wallet = new ethers.Wallet(privateKey);
+      if (wallet.address.toLowerCase() !== databaseAddress.toLowerCase()) {
+        console.error(`❌ Private key mismatch for ${currency}:`);
+        console.error(`   Database address: ${databaseAddress}`);
+        console.error(`   Private key address: ${wallet.address}`);
+        throw new Error(`Private key does not match ${currency} database address. Use setPoolPrivateKey() to set the correct private key.`);
+      }
+    }
+    
+    return privateKey;
   }
 
   /**
@@ -317,17 +450,45 @@ class PoolWalletService {
    * Send crypto from pool wallet (for withdrawals)
    */
   async sendFromPool(currency, toAddress, amount) {
+    console.log(`🚀 Starting pool withdrawal: ${amount} ${currency} to ${toAddress}`);
+    
+    // Validate inputs
+    if (!currency || !toAddress || !amount) {
+      throw new Error('Missing required parameters: currency, toAddress, amount');
+    }
+    
+    if (amount <= 0) {
+      throw new Error('Amount must be greater than 0');
+    }
+    
+    // Check pool balance first
+    const balances = await this.getPoolBalances();
+    const poolBalance = balances[currency.toUpperCase()]?.balance || 0;
+    
+    if (poolBalance < amount) {
+      throw new Error(`Insufficient pool balance. Available: ${poolBalance} ${currency}, Requested: ${amount} ${currency}`);
+    }
+    
+    console.log(`✅ Pool balance check passed: ${poolBalance} ${currency} available`);
+    
     const privateKey = await this.getPoolPrivateKey(currency);
     
+    let txHash;
     if (currency.toLowerCase() === 'btc') {
-      return await this.sendBTC(privateKey, toAddress, amount);
+      txHash = await this.sendBTC(privateKey, toAddress, amount);
     } else if (currency.toLowerCase() === 'eth') {
-      return await this.sendETH(privateKey, toAddress, amount);
+      txHash = await this.sendETH(privateKey, toAddress, amount);
     } else if (currency.toLowerCase() === 'usdt') {
-      return await this.sendUSDT(privateKey, toAddress, amount);
+      txHash = await this.sendUSDT(privateKey, toAddress, amount);
     } else {
       throw new Error(`Unsupported currency: ${currency}`);
     }
+    
+    // Log the withdrawal transaction
+    await this.logWithdrawalTransaction(currency, toAddress, amount, txHash);
+    
+    console.log(`✅ Pool withdrawal completed: ${txHash}`);
+    return txHash;
   }
 
   /**
@@ -346,34 +507,132 @@ class PoolWalletService {
    * Send Ethereum from pool wallet
    */
   async sendETH(privateKey, toAddress, amount) {
-    const provider = new ethers.JsonRpcProvider(process.env.ETH_RPC_URL);
-    const wallet = new ethers.Wallet(privateKey, provider);
-    
-    const tx = {
-      to: toAddress,
-      value: ethers.parseEther(amount.toString()),
-      gasLimit: 21000,
-    };
-    
-    const response = await wallet.sendTransaction(tx);
-    return response.hash;
+    try {
+      // Use Sepolia testnet RPC (fallback if ETH_RPC_URL is not set or invalid)
+      const rpcUrl = process.env.ETH_RPC_URL || 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const wallet = new ethers.Wallet(privateKey, provider);
+      
+      console.log(`💰 Sending ${amount} ETH from ${wallet.address} to ${toAddress}`);
+      
+      // Validate and normalize address
+      let normalizedAddress;
+      try {
+        normalizedAddress = ethers.getAddress(toAddress);
+      } catch (error) {
+        // If checksum is wrong, try to fix it
+        if (error.code === 'INVALID_ARGUMENT' && error.argument === 'address') {
+          try {
+            // Convert to lowercase and try again
+            normalizedAddress = ethers.getAddress(toAddress.toLowerCase());
+          } catch (e) {
+            throw new Error(`Invalid Ethereum address format: ${toAddress}`);
+          }
+        } else {
+          throw new Error(`Invalid Ethereum address: ${toAddress}`);
+        }
+      }
+      
+      // Estimate gas limit
+      const gasEstimate = await provider.estimateGas({
+        from: wallet.address,
+        to: normalizedAddress,
+        value: ethers.parseEther(amount.toString())
+      });
+      
+      const tx = {
+        to: normalizedAddress,
+        value: ethers.parseEther(amount.toString()),
+        gasLimit: gasEstimate * 120n / 100n, // Add 20% buffer
+      };
+      
+      console.log(`⛽ Gas estimate: ${gasEstimate.toString()}, Using: ${tx.gasLimit.toString()}`);
+      
+      const response = await wallet.sendTransaction(tx);
+      console.log(`📤 ETH transaction sent: ${response.hash}`);
+      
+      return response.hash;
+    } catch (error) {
+      console.error('❌ ETH send error:', error);
+      throw new Error(`Failed to send ETH: ${error.message}`);
+    }
   }
 
   /**
    * Send USDT from pool wallet
    */
   async sendUSDT(privateKey, toAddress, amount) {
-    const provider = new ethers.JsonRpcProvider(process.env.ETH_RPC_URL);
-    const wallet = new ethers.Wallet(privateKey, provider);
-    
-    const usdtContractAddress = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
-    const usdtAbi = ["function transfer(address to, uint256 amount)"];
-    const usdtContract = new ethers.Contract(usdtContractAddress, usdtAbi, wallet);
-    
-    const amountUsdt = ethers.parseUnits(amount.toString(), 6); // USDT has 6 decimals
-    
-    const tx = await usdtContract.transfer(toAddress, amountUsdt);
-    return tx.hash;
+    try {
+      // Use Sepolia testnet RPC (fallback if ETH_RPC_URL is not set or invalid)
+      const rpcUrl = process.env.ETH_RPC_URL || 'https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161';
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const wallet = new ethers.Wallet(privateKey, provider);
+      
+      // Use Sepolia testnet USDT contract
+      const usdtContractAddress = '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06'; // Sepolia USDT
+      const usdtAbi = ["function transfer(address to, uint256 amount)"];
+      const usdtContract = new ethers.Contract(usdtContractAddress, usdtAbi, wallet);
+      
+      console.log(`💰 Sending ${amount} USDT from ${wallet.address} to ${toAddress}`);
+      
+      // Validate and normalize address
+      let normalizedAddress;
+      try {
+        normalizedAddress = ethers.getAddress(toAddress);
+      } catch (error) {
+        // If checksum is wrong, try to fix it
+        if (error.code === 'INVALID_ARGUMENT' && error.argument === 'address') {
+          try {
+            // Convert to lowercase and try again
+            normalizedAddress = ethers.getAddress(toAddress.toLowerCase());
+          } catch (e) {
+            throw new Error(`Invalid Ethereum address format: ${toAddress}`);
+          }
+        } else {
+          throw new Error(`Invalid Ethereum address: ${toAddress}`);
+        }
+      }
+      
+      const amountUsdt = ethers.parseUnits(amount.toString(), 6); // USDT has 6 decimals
+      
+      // Estimate gas for USDT transfer
+      const gasEstimate = await usdtContract.transfer.estimateGas(normalizedAddress, amountUsdt);
+      
+      const tx = await usdtContract.transfer(normalizedAddress, amountUsdt, {
+        gasLimit: gasEstimate * 120n / 100n // Add 20% buffer
+      });
+      
+      console.log(`📤 USDT transaction sent: ${tx.hash}`);
+      return tx.hash;
+    } catch (error) {
+      console.error('❌ USDT send error:', error);
+      throw new Error(`Failed to send USDT: ${error.message}`);
+    }
+  }
+
+  /**
+   * Log withdrawal transaction to database
+   */
+  async logWithdrawalTransaction(currency, toAddress, amount, txHash) {
+    try {
+      const { query } = require('../config/database');
+      
+      await query(`
+        INSERT INTO transactions_ledger (
+          user_id, type, currency, amount, from_address, to_address, 
+          transaction_hash, status, created_at
+        ) VALUES (
+          'admin', 'admin_withdrawal', $1, $2, 
+          (SELECT address FROM pool_addresses WHERE currency = $1), 
+          $3, $4, 'completed', NOW()
+        )
+      `, [currency.toUpperCase(), amount, toAddress, txHash]);
+      
+      console.log(`📝 Withdrawal transaction logged: ${txHash}`);
+    } catch (error) {
+      console.error('❌ Error logging withdrawal transaction:', error);
+      // Don't throw error here as the transaction was already sent
+    }
   }
 }
 

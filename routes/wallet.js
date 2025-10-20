@@ -116,7 +116,7 @@ router.post('/deposit-intent', async (req, res) => {
     // Record intent for visibility/audit (no on-chain tx here)
     await poolWalletService.initializePoolWallets();
     const poolAddresses = poolWalletService.getPoolAddresses();
-    const poolAddress = poolAddresses[currency.toLowerCase()];
+    const poolAddress = poolAddresses[currency.toUpperCase()];
     
     await query(
       `INSERT INTO deposit_requests (user_id, currency, amount, wallet_address, status)
