@@ -3,6 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const LoginTrackingService = require('../services/loginTrackingService');
+const GeoRestrictionService = require('../services/geoRestrictionService');
 
 // Register new user
 router.post('/signup', async (req, res) => {
@@ -25,6 +27,36 @@ router.post('/signup', async (req, res) => {
         if (password.length < 6) {
             return res.status(400).json({ 
                 message: 'Password must be at least 6 characters long' 
+            });
+        }
+
+        // Check geographic restrictions and VPN detection
+        const locationValidation = await GeoRestrictionService.validateUserLocation(req);
+        if (!locationValidation.success) {
+            // Log the restricted attempt
+            await GeoRestrictionService.logRestrictedAttempt(req, email, locationValidation);
+            
+            // Determine error type
+            const errorType = locationValidation.vpnResult && (locationValidation.vpnResult.isVPN || locationValidation.vpnResult.isUSVPN) 
+                ? 'VPN_DETECTED' 
+                : 'GEOGRAPHIC_RESTRICTION';
+            
+            return res.status(403).json({
+                success: false,
+                error: errorType,
+                message: locationValidation.error.message,
+                details: locationValidation.error.details,
+                title: locationValidation.error.title,
+                supportEmail: locationValidation.error.supportEmail,
+                location: {
+                    country: locationValidation.location?.country,
+                    city: locationValidation.location?.city
+                },
+                vpnInfo: locationValidation.vpnResult ? {
+                    provider: locationValidation.vpnResult.provider,
+                    confidence: locationValidation.vpnResult.confidence,
+                    isUSVPN: locationValidation.vpnResult.isUSVPN
+                } : null
             });
         }
 
@@ -87,6 +119,8 @@ router.post('/login', async (req, res) => {
         // Find user
         const user = await User.findByEmail(email);
         if (!user) {
+            // Log failed login attempt
+            await LoginTrackingService.logFailedLogin(email, req, 'User not found');
             return res.status(401).json({ 
                 message: 'Invalid email or password' 
             });
@@ -95,6 +129,8 @@ router.post('/login', async (req, res) => {
         // Verify password
         const isValidPassword = await bcrypt.compare(password, user.password_hash);
         if (!isValidPassword) {
+            // Log failed login attempt
+            await LoginTrackingService.logFailedLogin(email, req, 'Invalid password');
             return res.status(401).json({ 
                 message: 'Invalid email or password' 
             });
@@ -114,6 +150,9 @@ router.post('/login', async (req, res) => {
         const token = jwt.sign(tokenPayload, process.env.JWT_SECRET || 'your-secret-key', {
             expiresIn: keepSignedIn ? '30d' : '24h'
         });
+
+        // Log successful login with IP tracking
+        await LoginTrackingService.logSuccessfulLogin(user.id, user.email, req, token);
 
         res.json({
             message: 'Login successful',
@@ -266,6 +305,132 @@ router.put('/profile', authenticateToken, async (req, res) => {
         console.error('Profile update error:', error);
         res.status(500).json({ 
             message: 'Internal server error' 
+        });
+    }
+});
+
+// Get user login history
+router.get('/login-history', authenticateToken, async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const loginHistory = await LoginTrackingService.getUserLoginHistory(req.user.id, parseInt(limit));
+        
+        res.json({
+            success: true,
+            data: loginHistory
+        });
+    } catch (error) {
+        console.error('Get login history error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// Admin: Get suspicious login activity
+router.get('/admin/suspicious-activity', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { hours = 24 } = req.query;
+        const suspiciousActivity = await LoginTrackingService.getSuspiciousActivity(parseInt(hours));
+        
+        res.json({
+            success: true,
+            data: suspiciousActivity
+        });
+    } catch (error) {
+        console.error('Get suspicious activity error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// Admin: Get login statistics
+router.get('/admin/login-statistics', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { days = 30 } = req.query;
+        const statistics = await LoginTrackingService.getLoginStatistics(parseInt(days));
+        
+        res.json({
+            success: true,
+            data: statistics
+        });
+    } catch (error) {
+        console.error('Get login statistics error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// Admin: Get geographic restrictions
+router.get('/admin/geo-restrictions', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            data: {
+                restrictedCountries: GeoRestrictionService.getRestrictedCountries(),
+                restrictedRegions: GeoRestrictionService.getRestrictedRegions()
+            }
+        });
+    } catch (error) {
+        console.error('Get geo restrictions error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// Admin: Update geographic restrictions
+router.put('/admin/geo-restrictions', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { restrictedCountries, restrictedRegions } = req.body;
+        
+        if (restrictedCountries) {
+            GeoRestrictionService.updateRestrictedCountries(restrictedCountries);
+        }
+        
+        if (restrictedRegions) {
+            GeoRestrictionService.updateRestrictedRegions(restrictedRegions);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Geographic restrictions updated successfully',
+            data: {
+                restrictedCountries: GeoRestrictionService.getRestrictedCountries(),
+                restrictedRegions: GeoRestrictionService.getRestrictedRegions()
+            }
+        });
+    } catch (error) {
+        console.error('Update geo restrictions error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
+
+// Check user location (for frontend warning)
+router.post('/check-location', async (req, res) => {
+    try {
+        const locationValidation = await GeoRestrictionService.validateUserLocation(req);
+        
+        res.json({
+            success: locationValidation.success,
+            location: locationValidation.location,
+            vpnResult: locationValidation.vpnResult,
+            warning: !locationValidation.success ? {
+                title: locationValidation.error.title,
+                message: locationValidation.error.message,
+                details: locationValidation.error.details,
+                supportEmail: locationValidation.error.supportEmail
+            } : null
+        });
+    } catch (error) {
+        console.error('Location check error:', error);
+        res.status(500).json({ 
+            success: false,
+            message: 'Unable to verify your location. Please contact support.' 
         });
     }
 });
