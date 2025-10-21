@@ -237,46 +237,62 @@ router.get('/users', async (req, res) => {
 // Get all SKRs (Storage Keeping Receipts)
 router.get('/skrs', async (req, res) => {
   try {
-    // Check if skrs table exists
-    const tableCheck = await query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-        AND table_name = 'skrs'
-      );
-    `);
-    
-    if (!tableCheck.rows[0].exists) {
-      // Table doesn't exist, return empty array
-      console.log('SKRs table does not exist, returning empty array');
-      return res.json([]);
-    }
-    
+    // Get SKRs from gold_holdings table (which represents SKRs in our system)
     const result = await query(`
       SELECT 
-        sr.id,
-        sr.skr_number,
-        sr.user_id,
+        gh.id,
+        gh.skr_reference as skr_number,
+        gh.user_id,
         u.full_name as user_name,
         u.email as user_email,
-        sr.storage_location,
-        sr.gold_weight,
-        sr.gold_purity,
-        sr.status,
-        sr.issued_date,
-        sr.expiry_date,
-        sr.created_at,
-        sr.updated_at
-      FROM skrs sr
-      LEFT JOIN users u ON sr.user_id = u.id
-      ORDER BY sr.created_at DESC
+        'UOB Vault A' as storage_location,
+        gh.weight_grams as gold_weight,
+        99.9 as gold_purity,
+        gh.status,
+        gh.created_at as issued_date,
+        (gh.created_at + INTERVAL '1 year') as expiry_date,
+        gh.created_at,
+        gh.updated_at,
+        gh.purchase_price_per_gram,
+        gh.total_paid_usd,
+        -- Calculate current value and profit/loss
+        (gh.weight_grams * COALESCE(gp.price_per_gram_usd, 2000)) as current_value,
+        ((gh.weight_grams * COALESCE(gp.price_per_gram_usd, 2000)) - gh.total_paid_usd) as profit_loss
+      FROM gold_holdings gh
+      LEFT JOIN users u ON gh.user_id = u.id
+      LEFT JOIN (
+        SELECT price_per_gram_usd 
+        FROM gold_price_history 
+        ORDER BY created_at DESC 
+        LIMIT 1
+      ) gp ON true
+      WHERE gh.status IN ('holding', 'active', 'sold')
+      ORDER BY gh.created_at DESC
     `);
     
-    res.json(result.rows);
+    // Format the data for the frontend
+    const skrs = result.rows.map(row => ({
+      id: row.id,
+      skr_number: row.skr_number || `SKR-${row.id.slice(-8).toUpperCase()}`,
+      user_id: row.user_id,
+      user_name: row.user_name || 'Unknown User',
+      user_email: row.user_email || 'unknown@example.com',
+      storage_location: row.storage_location,
+      gold_weight: parseFloat(row.gold_weight || 0),
+      gold_purity: parseFloat(row.gold_purity || 99.9),
+      status: row.status === 'sold' ? 'redeemed' : (row.status || 'active'),
+      issued_date: row.issued_date,
+      expiry_date: row.expiry_date,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      current_value: parseFloat(row.current_value || 0),
+      profit_loss: parseFloat(row.profit_loss || 0)
+    }));
+    
+    res.json(skrs);
   } catch (error) {
     console.error('Get SKRs error:', error);
-    // Return empty array instead of error to prevent frontend crashes
-    res.json([]);
+    res.status(500).json({ message: 'Failed to fetch SKRs' });
   }
 });
 
@@ -633,6 +649,107 @@ router.post('/pool-withdrawal', async (req, res) => {
 });
 
 // Approve user withdrawal request
+// Get all transactions for admin view
+router.get('/transactions', async (req, res) => {
+  try {
+    const { type, status, limit = 100 } = req.query;
+    
+    // Import userBalanceService to get all transactions
+    const userBalanceService = require('../services/userBalanceService');
+    
+    // Get all transactions from all users (admin view)
+    const result = await query(`
+      SELECT 
+        tl.*,
+        u.full_name as user_name,
+        u.email as user_email
+      FROM transactions_ledger tl
+      LEFT JOIN users u ON tl.user_id = u.id
+      WHERE 1=1
+      ${type && type !== 'all' ? `AND tl.type = $1` : ''}
+      ${status && status !== 'all' ? `AND tl.status = $${type && type !== 'all' ? '2' : '1'}` : ''}
+      ORDER BY tl.created_at DESC
+      LIMIT $${type && type !== 'all' ? (status && status !== 'all' ? '3' : '2') : (status && status !== 'all' ? '2' : '1')}
+    `, [
+      ...(type && type !== 'all' ? [type] : []),
+      ...(status && status !== 'all' ? [status] : []),
+      parseInt(limit)
+    ]);
+    
+    // Format transactions for admin view
+    const transactions = result.rows.map(tx => {
+      const meta = tx.meta ? (typeof tx.meta === 'string' ? JSON.parse(tx.meta) : tx.meta) : {};
+      
+      return {
+        id: tx.id,
+        user_id: tx.user_id,
+        user_name: tx.user_name || 'Unknown User',
+        user_email: tx.user_email || 'unknown@example.com',
+        type: tx.type,
+        currency: tx.currency,
+        amount: parseFloat(tx.amount),
+        status: tx.status,
+        created_at: tx.created_at,
+        description: tx.description,
+        transaction_hash: meta.transaction_hash,
+        from_address: meta.from_address,
+        to_address: meta.to_address,
+        gold_grams: meta.goldGrams,
+        gold_price_per_gram: meta.goldPricePerGram
+      };
+    });
+    
+    res.json(transactions);
+  } catch (error) {
+    console.error('Get admin transactions error:', error);
+    res.status(500).json({ message: 'Failed to fetch transactions' });
+  }
+});
+
+// Get all withdrawals for admin view
+router.get('/withdrawals', async (req, res) => {
+  try {
+    const { status, limit = 100 } = req.query;
+    
+    const result = await query(`
+      SELECT 
+        w.*,
+        u.full_name as user_name,
+        u.email as user_email
+      FROM withdrawals w
+      LEFT JOIN users u ON w.user_id = u.id
+      WHERE 1=1
+      ${status && status !== 'all' ? `AND w.status = $1` : ''}
+      ORDER BY w.created_at DESC
+      LIMIT $${status && status !== 'all' ? '2' : '1'}
+    `, [
+      ...(status && status !== 'all' ? [status] : []),
+      parseInt(limit)
+    ]);
+    
+    // Format withdrawals for admin view
+    const withdrawals = result.rows.map(w => ({
+      id: w.id,
+      user_id: w.user_id,
+      user_name: w.user_name || 'Unknown User',
+      user_email: w.user_email || 'unknown@example.com',
+      currency: w.currency,
+      amount: parseFloat(w.amount),
+      destination_address: w.destination_address,
+      status: w.status,
+      created_at: w.created_at,
+      fee: parseFloat(w.fee || 0),
+      net_amount: parseFloat(w.net_amount || w.amount),
+      transaction_hash: w.transaction_hash
+    }));
+    
+    res.json(withdrawals);
+  } catch (error) {
+    console.error('Get admin withdrawals error:', error);
+    res.status(500).json({ message: 'Failed to fetch withdrawals' });
+  }
+});
+
 router.post('/approve-withdrawal/:requestId', async (req, res) => {
   try {
     const { requestId } = req.params;
