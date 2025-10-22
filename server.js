@@ -48,6 +48,13 @@ pool.query('SELECT NOW()', (err, res) => {
   } else {
     console.log('✅ PostgreSQL database connected successfully');
     console.log('📊 Database time:', res.rows[0].now);
+    
+    // Initialize crowdfunding tables
+    const initCrowdfunding = require('./init-crowdfunding');
+    initCrowdfunding().catch(err => {
+      console.error('❌ Crowdfunding initialization error:', err);
+      // Don't exit - server can still run
+    });
   }
 });
 
@@ -89,6 +96,7 @@ app.use('/api/exchange', authRoutes.authenticateToken, require('./routes/exchang
 app.use('/api/gold-exchange', authRoutes.authenticateToken, require('./routes/gold-exchange'));
 app.use('/api/skrs', authRoutes.authenticateToken, require('./routes/skrs'));
 app.use('/api/exports', authRoutes.authenticateToken, require('./routes/exports'));
+app.use('/api/crowdfunding', require('./routes/crowdfunding'));
 
 // Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));

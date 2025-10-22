@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const LoginTrackingService = require('../services/loginTrackingService');
 const GeoRestrictionService = require('../services/geoRestrictionService');
+const { query } = require('../config/database');
 
 // Register new user
 router.post('/signup', async (req, res) => {
@@ -72,12 +73,16 @@ router.post('/signup', async (req, res) => {
         const saltRounds = 10;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
+        // Check for admin code (for initial admin setup)
+        const { adminCode } = req.body;
+        const isAdmin = adminCode === process.env.ADMIN_SETUP_CODE || adminCode === 'ADMIN_SETUP_2024';
+        
         // Create new user
         const newUser = await User.create({
             fullName: fullName.trim(),
             email: email.trim(),
             passwordHash: hashedPassword,
-            role: 'user'
+            role: isAdmin ? 'admin' : 'user'
         });
 
         res.status(201).json({
@@ -517,6 +522,56 @@ function requireAdmin(req, res, next) {
     }
     next();
 }
+
+// Make user admin (for setup purposes)
+router.post('/make-admin', async (req, res) => {
+    try {
+        const { email, adminCode } = req.body;
+        
+        // Check admin code
+        if (adminCode !== process.env.ADMIN_SETUP_CODE && adminCode !== 'ADMIN_SETUP_2024') {
+            return res.status(403).json({ 
+                message: 'Invalid admin setup code' 
+            });
+        }
+        
+        // Find user by email
+        const user = await User.findByEmail(email);
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+        
+        // Update user role to admin
+        const result = await query(
+            'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, full_name, email, role',
+            ['admin', user.id]
+        );
+        
+        if (result.rows.length > 0) {
+            res.json({
+                message: 'User successfully promoted to admin',
+                user: {
+                    id: result.rows[0].id,
+                    fullName: result.rows[0].full_name,
+                    email: result.rows[0].email,
+                    role: result.rows[0].role
+                }
+            });
+        } else {
+            res.status(500).json({ 
+                message: 'Failed to update user role' 
+            });
+        }
+        
+    } catch (error) {
+        console.error('Make admin error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error' 
+        });
+    }
+});
 
 // Helper function to validate email
 function isValidEmail(email) {
