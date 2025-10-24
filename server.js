@@ -55,6 +55,9 @@ pool.query('SELECT NOW()', (err, res) => {
       console.error('❌ Crowdfunding initialization error:', err);
       // Don't exit - server can still run
     });
+    
+    // Create withdrawal_requests table if it doesn't exist
+    createWithdrawalTable();
   }
 });
 
@@ -97,6 +100,7 @@ app.use('/api/gold-exchange', authRoutes.authenticateToken, require('./routes/go
 app.use('/api/skrs', authRoutes.authenticateToken, require('./routes/skrs'));
 app.use('/api/exports', authRoutes.authenticateToken, require('./routes/exports'));
 app.use('/api/crowdfunding', require('./routes/crowdfunding'));
+app.use('/api/withdrawals', require('./routes/withdrawals'));
 
 // Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));
@@ -189,3 +193,28 @@ server.listen(PORT, () => {
   console.log(`🛡️ Rate limiting: Enabled`);
   console.log(`📧 Email notifications: ${process.env.SMTP_HOST ? 'Enabled' : 'Using Ethereal (test mode)'}`);
 });
+
+// Function to create withdrawal_requests table
+async function createWithdrawalTable() {
+  try {
+    // Check if table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'withdrawal_requests'
+      );
+    `);
+    
+    if (!tableCheck.rows[0].exists) {
+      console.log('Creating withdrawal_requests table...');
+      const fs = require('fs');
+      const sql = fs.readFileSync('./database/add-withdrawal-requests.sql', 'utf8');
+      await pool.query(sql);
+      console.log('✅ Withdrawal requests table created successfully!');
+    } else {
+      console.log('✅ Withdrawal requests table already exists');
+    }
+  } catch (error) {
+    console.error('❌ Error creating withdrawal table:', error.message);
+  }
+}

@@ -621,6 +621,35 @@ router.get('/recent-activities', async (req, res) => {
   }
 });
 
+// Get all withdrawal requests (admin)
+router.get('/withdrawals', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const { query } = require('../config/database');
+    
+    let sql = `
+      SELECT wr.*, u.email, u.full_name
+      FROM withdrawal_requests wr
+      JOIN users u ON wr.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (status) {
+      sql += ` AND wr.status = $1`;
+      params.push(status);
+    }
+
+    sql += ` ORDER BY wr.created_at DESC LIMIT 100`;
+
+    const result = await query(sql, params);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get withdrawals error:', error);
+    res.status(500).json({ message: 'Failed to fetch withdrawals' });
+  }
+});
+
 // Get pool wallet balances and addresses
 router.get('/pool-wallets', async (req, res) => {
   try {
