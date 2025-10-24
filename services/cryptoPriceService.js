@@ -15,15 +15,16 @@ class CryptoPriceService {
         return null;
       }
 
-      // Noones API endpoint for crypto prices
+      // Noones API endpoint for crypto prices - use correct endpoint
       const response = await axios.get(
-        'https://dev.noones.com/api/v1/prices',
+        'https://api.noones.com/api/v1/prices',
         {
           headers: {
             'Accept': 'application/json',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.NOONES_API_KEY}`
           },
-          timeout: 5000
+          timeout: 10000 // Increased timeout
         }
       );
 
@@ -62,7 +63,10 @@ class CryptoPriceService {
             ids: 'bitcoin,ethereum,tether',
             vs_currencies: 'usd'
           },
-          timeout: 5000
+          timeout: 15000, // Increased timeout
+          headers: {
+            'User-Agent': 'TrackPlatform/1.0'
+          }
         }
       );
 
@@ -80,10 +84,19 @@ class CryptoPriceService {
   // Fetch prices from Binance API (backup)
   async fetchPricesFromBinance() {
     try {
-      const [btc, eth, usdt] = await Promise.all([
-        axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'),
-        axios.get('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT'),
-        axios.get('https://api.binance.com/api/v3/ticker/price?symbol=USDTUSDT')
+      const [btc, eth] = await Promise.all([
+        axios.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'TrackPlatform/1.0'
+          }
+        }),
+        axios.get('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT', {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'TrackPlatform/1.0'
+          }
+        })
       ]);
 
       return {
@@ -115,34 +128,40 @@ class CryptoPriceService {
       }
     }
 
-    // Fetch fresh prices - try Noones API first
-    let prices = await this.fetchPricesFromNoones();
+    // Try to get prices from database first (fastest)
+    let prices = await this.getPricesFromDatabase();
     
-    // Fallback to CoinGecko if Noones fails
-    if (!prices) {
+    // If no database prices or they're too old, try APIs
+    if (!prices || Object.keys(prices).length === 0) {
+      // Fetch fresh prices - try CoinGecko first (most reliable)
       prices = await this.fetchPricesFromCoinGecko();
-    }
-    
-    // Fallback to Binance if both fail
-    if (!prices) {
-      prices = await this.fetchPricesFromBinance();
+      
+      // Fallback to Binance if CoinGecko fails
+      if (!prices) {
+        prices = await this.fetchPricesFromBinance();
+      }
+      
+      // Fallback to Noones if both fail
+      if (!prices) {
+        prices = await this.fetchPricesFromNoones();
+      }
     }
 
-    // Fallback to database if both APIs fail
-    if (!prices) {
-      prices = await this.getPricesFromDatabase();
+    // Final fallback to default prices
+    if (!prices || Object.keys(prices).length === 0) {
+      prices = { BTC: 60000, ETH: 3000, USDT: 1.0 };
     }
 
     // Update cache
-    if (prices) {
-      this.priceCache.set('BTC', prices.BTC);
-      this.priceCache.set('ETH', prices.ETH);
-      this.priceCache.set('USDT', prices.USDT);
-      this.priceCache.set('lastUpdate', now);
+    this.priceCache.set('BTC', prices.BTC);
+    this.priceCache.set('ETH', prices.ETH);
+    this.priceCache.set('USDT', prices.USDT);
+    this.priceCache.set('lastUpdate', now);
 
-      // Update database
-      await this.updatePricesInDatabase(prices);
-    }
+    // Update database (don't wait for it to complete)
+    this.updatePricesInDatabase(prices).catch(err => {
+      console.error('Database update failed:', err.message);
+    });
 
     return {
       ...prices,
@@ -164,10 +183,15 @@ class CryptoPriceService {
         prices[row.symbol] = parseFloat(row.current_price_usd);
       });
 
-      return prices;
+      // Only return if we have all three currencies
+      if (prices.BTC && prices.ETH && prices.USDT) {
+        return prices;
+      }
+      
+      return null; // Return null if incomplete data
     } catch (error) {
-      console.error('Database price fetch error:', error);
-      return { BTC: 60000, ETH: 3000, USDT: 1.0 }; // Fallback defaults
+      console.error('Database price fetch error:', error.message);
+      return null; // Return null to trigger API fallback
     }
   }
 
@@ -175,23 +199,30 @@ class CryptoPriceService {
   async updatePricesInDatabase(prices) {
     try {
       for (const [symbol, price] of Object.entries(prices)) {
-        // Update current price
-        await query(
-          `UPDATE crypto_currencies 
-           SET current_price_usd = $1, last_updated = CURRENT_TIMESTAMP
-           WHERE symbol = $2`,
-          [price, symbol]
-        );
+        // Update current price with timeout
+        await Promise.race([
+          query(
+            `UPDATE crypto_currencies 
+             SET current_price_usd = $1, last_updated = CURRENT_TIMESTAMP
+             WHERE symbol = $2`,
+            [price, symbol]
+          ),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Database update timeout')), 10000)
+          )
+        ]);
 
-        // Log price history
-        await query(
+        // Log price history (don't wait for completion)
+        query(
           `INSERT INTO crypto_price_history (currency_symbol, price_usd, source)
            VALUES ($1, $2, 'live_api')`,
           [symbol, price]
-        );
+        ).catch(err => {
+          console.error('Price history insert failed:', err.message);
+        });
       }
     } catch (error) {
-      console.error('Database price update error:', error);
+      console.error('Database price update error:', error.message);
     }
   }
 

@@ -8,12 +8,16 @@ const pool = new Pool({
     // Force TLS 1.2 or higher
     minVersion: 'TLSv1.2'
   },
-  max: 10, // Reduced pool size for better stability
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000, // Reduced timeout
+  max: 5, // Reduced pool size for better stability
+  idleTimeoutMillis: 60000, // Increased idle timeout
+  connectionTimeoutMillis: 30000, // Increased connection timeout
   // Add retry settings
   keepAlive: true,
   keepAliveInitialDelayMillis: 10000,
+  // Add statement timeout
+  statement_timeout: 30000,
+  // Add query timeout
+  query_timeout: 30000,
 });
 
 // Test connection
