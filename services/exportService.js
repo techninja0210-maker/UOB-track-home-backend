@@ -126,7 +126,7 @@ class ExportService {
           id,
           weight_grams,
           purchase_price_per_gram,
-          total_value_usd,
+          total_paid_usd,
           current_value_usd,
           profit_loss_usd,
           source_crypto,
@@ -144,7 +144,7 @@ class ExportService {
           { id: 'id', title: 'Holding ID' },
           { id: 'weight_grams', title: 'Weight (grams)' },
           { id: 'purchase_price_per_gram', title: 'Purchase Price/gram (USD)' },
-          { id: 'total_value_usd', title: 'Total Value (USD)' },
+          { id: 'total_paid_usd', title: 'Total Paid (USD)' },
           { id: 'current_value_usd', title: 'Current Value (USD)' },
           { id: 'profit_loss_usd', title: 'Profit/Loss (USD)' },
           { id: 'source_crypto', title: 'Source Crypto' },
@@ -611,7 +611,7 @@ class ExportService {
           `SELECT 
             weight_grams,
             purchase_price_per_gram,
-            total_value_usd,
+            total_paid_usd,
             current_value_usd,
             profit_loss_usd,
             source_crypto,
@@ -648,7 +648,7 @@ class ExportService {
 
         // Summary
         const totalWeight = result.rows.reduce((sum, h) => sum + parseFloat(h.weight_grams || 0), 0);
-        const totalValue = result.rows.reduce((sum, h) => sum + parseFloat(h.current_value_usd || h.total_value_usd || 0), 0);
+        const totalValue = result.rows.reduce((sum, h) => sum + parseFloat(h.current_value_usd || h.total_paid_usd || 0), 0);
         const totalPL = result.rows.reduce((sum, h) => sum + parseFloat(h.profit_loss_usd || 0), 0);
 
         doc.fontSize(12).fillColor('#FFD700').text('Summary', 50, doc.y);
@@ -675,8 +675,8 @@ class ExportService {
             doc.fontSize(10).fillColor('#000')
               .text(`Weight: ${holding.weight_grams} grams`, 60, doc.y)
               .text(`Purchase Price: $${holding.purchase_price_per_gram}/gram`, 60, doc.y)
-              .text(`Total Paid: $${holding.total_value_usd}`, 60, doc.y)
-              .text(`Current Value: $${holding.current_value_usd || holding.total_value_usd}`, 60, doc.y)
+              .text(`Total Paid: $${holding.total_paid_usd}`, 60, doc.y)
+              .text(`Current Value: $${holding.current_value_usd || holding.total_paid_usd}`, 60, doc.y)
               .text(`P&L: ${holding.profit_loss_usd >= 0 ? '+' : ''}$${holding.profit_loss_usd || 0}`, 60, doc.y)
               .text(`Source: ${holding.source_crypto_amount} ${holding.source_crypto}`, 60, doc.y)
               .text(`Status: ${holding.status}`, 60, doc.y)

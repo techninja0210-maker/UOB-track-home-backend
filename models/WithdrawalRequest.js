@@ -15,6 +15,10 @@ class WithdrawalRequest {
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
     this.completedAt = data.completed_at;
+    
+    // User information (when joined with users table)
+    this.fullName = data.full_name;
+    this.email = data.email;
   }
 
   static async create(data) {

@@ -222,7 +222,11 @@ router.get('/users', async (req, res) => {
         role,
         created_at,
         last_login,
-        CASE WHEN role = 'admin' OR role = 'user' THEN true ELSE false END as is_active
+        CASE 
+          WHEN email LIKE '%[SUSPENDED]%' THEN false
+          WHEN role = 'admin' OR role = 'user' THEN true 
+          ELSE false 
+        END as is_active
       FROM users 
       ORDER BY created_at DESC
     `);
@@ -231,6 +235,145 @@ router.get('/users', async (req, res) => {
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ message: 'Failed to fetch users' });
+  }
+});
+
+// Update user information (admin only)
+router.put('/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { full_name, email, role } = req.body;
+
+    // Validate input
+    if (!full_name || !email) {
+      return res.status(400).json({ message: 'Full name and email are required' });
+    }
+
+    // Check if email already exists for another user
+    const existingUser = await query(
+      'SELECT id FROM users WHERE email = $1 AND id != $2',
+      [email, id]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ message: 'Email already exists for another user' });
+    }
+
+    // Update user
+    const result = await query(
+      `UPDATE users 
+       SET full_name = $1, email = $2, role = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING id, full_name, email, role, created_at, last_login`,
+      [full_name, email, role || 'user', id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({ message: 'User updated successfully', user: result.rows[0] });
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({ message: 'Failed to update user' });
+  }
+});
+
+// Suspend/Unsuspend user (admin only)
+router.patch('/users/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_active } = req.body;
+
+    // Since we can't modify the database schema, we'll use a different approach
+    // We'll store suspension status in a JSON field or use a different strategy
+    // For now, let's use a simple approach by updating the user's email with a marker
+    // This is a temporary solution until we can modify the database schema
+    
+    if (is_active) {
+      // Activate user - remove suspension marker and clean up email
+      const result = await query(
+        `UPDATE users 
+         SET email = TRIM(REPLACE(email, '[SUSPENDED]', '')), updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING id, full_name, email, role, created_at, last_login`,
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      res.json({ 
+        message: 'User activated successfully', 
+        user: {
+          ...result.rows[0],
+          is_active: true
+        }
+      });
+    } else {
+      // Suspend user - add suspension marker to email (only if not already suspended)
+      const result = await query(
+        `UPDATE users 
+         SET email = CASE 
+           WHEN email LIKE '%[SUSPENDED]%' THEN email 
+           ELSE TRIM(email) || ' [SUSPENDED]' 
+         END, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING id, full_name, email, role, created_at, last_login`,
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      
+      res.json({ 
+        message: 'User suspended successfully', 
+        user: {
+          ...result.rows[0],
+          is_active: false
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Update user status error:', error);
+    res.status(500).json({ message: 'Failed to update user status' });
+  }
+});
+
+// Reset user password (admin only)
+router.post('/users/:id/reset-password', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { new_password } = req.body;
+
+    if (!new_password || new_password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    // Hash the new password
+    const bcrypt = require('bcrypt');
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(new_password, saltRounds);
+
+    // Update password
+    const result = await query(
+      `UPDATE users 
+       SET password = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING id, full_name, email`,
+      [hashedPassword, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 });
 
@@ -799,12 +942,14 @@ router.get('/transactions', async (req, res) => {
       SELECT 
         tl.*,
         u.full_name as user_name,
-        u.email as user_email
+        u.email as user_email,
+        COALESCE(tl.meta->>'status', 'pending') as status,
+        tl.meta->>'description' as description
       FROM transactions_ledger tl
       LEFT JOIN users u ON tl.user_id = u.id
       WHERE 1=1
       ${type && type !== 'all' ? `AND tl.type = $1` : ''}
-      ${status && status !== 'all' ? `AND tl.status = $${type && type !== 'all' ? '2' : '1'}` : ''}
+      ${status && status !== 'all' ? `AND COALESCE(tl.meta->>'status', 'pending') = $${type && type !== 'all' ? '2' : '1'}` : ''}
       ORDER BY tl.created_at DESC
       LIMIT $${type && type !== 'all' ? (status && status !== 'all' ? '3' : '2') : (status && status !== 'all' ? '2' : '1')}
     `, [

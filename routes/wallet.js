@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
       btcValueUsd: parseFloat(wallet.btc_value_usd || 0),
       usdtValueUsd: parseFloat(wallet.usdt_value_usd || 0),
       ethValueUsd: parseFloat(wallet.eth_value_usd || 0),
-      totalValueUsd: parseFloat(wallet.total_value_usd || 0),
+      totalValueUsd: parseFloat(wallet.total_paid_usd || 0),
       btcAddress: wallet.btc_address,
       usdtAddress: wallet.usdt_address,
       ethAddress: wallet.eth_address
@@ -69,7 +69,7 @@ router.get('/balance', async (req, res) => {
           address: wallet.eth_address
         }
       ],
-      totalValueUsd: parseFloat(wallet.total_value_usd || 0)
+      totalValueUsd: parseFloat(wallet.total_paid_usd || 0)
     });
   } catch (error) {
     console.error('Get wallet balance error:', error);
