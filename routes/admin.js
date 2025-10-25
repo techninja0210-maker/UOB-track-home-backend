@@ -552,7 +552,7 @@ router.get('/recent-activities', async (req, res) => {
         SELECT 
           'transaction' as type,
           'New transaction' as description,
-          CONCAT(amount, ' ', currency) as value,
+          CONCAT(COALESCE(transaction_amount, '0'), ' ', COALESCE(currency, 'USD')) as value,
           created_at as timestamp
         FROM transactions 
         WHERE created_at >= NOW() - INTERVAL '7 days'

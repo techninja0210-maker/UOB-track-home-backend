@@ -101,6 +101,8 @@ app.use('/api/skrs', authRoutes.authenticateToken, require('./routes/skrs'));
 app.use('/api/exports', authRoutes.authenticateToken, require('./routes/exports'));
 app.use('/api/crowdfunding', require('./routes/crowdfunding'));
 app.use('/api/withdrawals', require('./routes/withdrawals'));
+app.use('/api/user', require('./routes/account-settings'));
+app.use('/api/admin', require('./routes/account-settings'));
 
 // Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));
