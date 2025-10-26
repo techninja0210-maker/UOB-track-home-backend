@@ -4,6 +4,7 @@ const { query } = require('../config/database');
 const poolWalletService = require('../services/poolWalletService');
 const Receipt = require('../models/Receipt');
 const User = require('../models/User');
+const GoldHolding = require('../models/GoldHolding');
 
 // Get all receipts (admin view)
 router.get('/receipts', async (req, res) => {
@@ -377,67 +378,6 @@ router.post('/users/:id/reset-password', async (req, res) => {
   }
 });
 
-// Get all SKRs (Storage Keeping Receipts)
-router.get('/skrs', async (req, res) => {
-  try {
-    // Get SKRs from gold_holdings table (which represents SKRs in our system)
-    const result = await query(`
-      SELECT 
-        gh.id,
-        gh.skr_reference as skr_number,
-        gh.user_id,
-        u.full_name as user_name,
-        u.email as user_email,
-        'UOB Vault A' as storage_location,
-        gh.weight_grams as gold_weight,
-        99.9 as gold_purity,
-        gh.status,
-        gh.created_at as issued_date,
-        (gh.created_at + INTERVAL '1 year') as expiry_date,
-        gh.created_at,
-        gh.updated_at,
-        gh.purchase_price_per_gram,
-        gh.total_paid_usd,
-        -- Calculate current value and profit/loss
-        (gh.weight_grams * COALESCE(gp.price_per_gram_usd, 2000)) as current_value,
-        ((gh.weight_grams * COALESCE(gp.price_per_gram_usd, 2000)) - gh.total_paid_usd) as profit_loss
-      FROM gold_holdings gh
-      LEFT JOIN users u ON gh.user_id = u.id
-      LEFT JOIN (
-        SELECT price_per_gram_usd 
-        FROM gold_price_history 
-        ORDER BY created_at DESC 
-        LIMIT 1
-      ) gp ON true
-      WHERE gh.status IN ('holding', 'active', 'sold')
-      ORDER BY gh.created_at DESC
-    `);
-    
-    // Format the data for the frontend
-    const skrs = result.rows.map(row => ({
-      id: row.id,
-      skr_number: row.skr_number || `SKR-${row.id.slice(-8).toUpperCase()}`,
-      user_id: row.user_id,
-      user_name: row.user_name || 'Unknown User',
-      user_email: row.user_email || 'unknown@example.com',
-      storage_location: row.storage_location,
-      gold_weight: parseFloat(row.gold_weight || 0),
-      gold_purity: parseFloat(row.gold_purity || 99.9),
-      status: row.status === 'sold' ? 'redeemed' : (row.status || 'active'),
-      issued_date: row.issued_date,
-      expiry_date: row.expiry_date,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      current_value: parseFloat(row.current_value || 0),
-      profit_loss: parseFloat(row.profit_loss || 0)
-    }));
-    
-    res.json(skrs);
-  } catch (error) {
-    console.error('Get SKRs error:', error);
-    res.status(500).json({ message: 'Failed to fetch SKRs' });
-  }
-});
 
 // Get gold prices for admin dashboard (formatted for frontend)
 router.get('/gold-prices', async (req, res) => {
@@ -1075,6 +1015,140 @@ router.post('/approve-withdrawal/:requestId', async (req, res) => {
   } catch (error) {
     console.error('Approve withdrawal error:', error);
     res.status(500).json({ message: 'Failed to approve withdrawal' });
+  }
+});
+
+// ===== SKR MANAGEMENT ENDPOINTS =====
+
+// Get all SKRs (admin view)
+router.get('/skrs', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT 
+        gh.id,
+        gh.user_id,
+        u.full_name as user_name,
+        u.email as user_email,
+        gh.skr_reference as skr_number,
+        gh.weight_grams as gold_weight,
+        99.9 as gold_purity,
+        'UOB Vault A' as storage_location,
+        gh.status,
+        gh.created_at,
+        (gh.created_at + INTERVAL '1 year') as expiry_date,
+        gh.purchase_price_per_gram,
+        gh.total_paid_usd,
+        (gh.weight_grams * COALESCE(gh.purchase_price_per_gram, 2000)) as current_value,
+        ((gh.weight_grams * COALESCE(gh.purchase_price_per_gram, 2000)) - gh.total_paid_usd) as profit_loss
+      FROM gold_holdings gh
+      LEFT JOIN users u ON gh.user_id = u.id
+      ORDER BY gh.created_at DESC
+    `);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get admin SKRs error:', error);
+    res.status(500).json({ message: 'Failed to fetch SKRs' });
+  }
+});
+
+// Update SKR (admin edit)
+router.put('/skrs/:id', async (req, res) => {
+  try {
+    const { skr_number, gold_weight, status } = req.body;
+    
+    const result = await query(`
+      UPDATE gold_holdings 
+      SET 
+        skr_reference = $2,
+        weight_grams = $3,
+        status = $4,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [req.params.id, skr_number, gold_weight, status]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'SKR not found' });
+    }
+    
+    res.json({ message: 'SKR updated successfully', skr: result.rows[0] });
+  } catch (error) {
+    console.error('Update SKR error:', error);
+    res.status(500).json({ message: 'Failed to update SKR' });
+  }
+});
+
+// Suspend SKR (admin action)
+router.patch('/skrs/:id/suspend', async (req, res) => {
+  try {
+    const result = await query(`
+      UPDATE gold_holdings 
+      SET 
+        status = 'sold',
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'SKR not found' });
+    }
+    
+    res.json({ message: 'SKR suspended successfully', skr: result.rows[0] });
+  } catch (error) {
+    console.error('Suspend SKR error:', error);
+    res.status(500).json({ message: 'Failed to suspend SKR' });
+  }
+});
+
+// Transfer SKR (admin action)
+router.post('/skrs/:id/transfer', async (req, res) => {
+  try {
+    const { new_user_id, transfer_reason } = req.body;
+    
+    // Verify new user exists
+    const userCheck = await query('SELECT id FROM users WHERE id = $1', [new_user_id]);
+    if (userCheck.rows.length === 0) {
+      return res.status(400).json({ message: 'New user not found' });
+    }
+    
+    // Get current SKR details
+    const skrResult = await query('SELECT * FROM gold_holdings WHERE id = $1', [req.params.id]);
+    if (skrResult.rows.length === 0) {
+      return res.status(404).json({ message: 'SKR not found' });
+    }
+    
+    const currentSKR = skrResult.rows[0];
+    
+    // Update SKR ownership
+    const result = await query(`
+      UPDATE gold_holdings 
+      SET 
+        user_id = $2,
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [req.params.id, new_user_id]);
+    
+    // Log the transfer
+    await query(`
+      INSERT INTO skr_transfers (skr_id, from_user_id, to_user_id, transfer_reason, created_at)
+      VALUES ($1, $2, $3, $4, NOW())
+    `, [req.params.id, currentSKR.user_id, new_user_id, transfer_reason]);
+    
+    res.json({ 
+      message: 'SKR transferred successfully', 
+      skr: result.rows[0],
+      transfer: {
+        from_user_id: currentSKR.user_id,
+        to_user_id: new_user_id,
+        reason: transfer_reason
+      }
+    });
+  } catch (error) {
+    console.error('Transfer SKR error:', error);
+    res.status(500).json({ message: 'Failed to transfer SKR' });
   }
 });
 
