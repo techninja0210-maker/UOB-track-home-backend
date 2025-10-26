@@ -85,6 +85,18 @@ router.post('/signup', async (req, res) => {
             role: isAdmin ? 'admin' : 'user'
         });
 
+        // Process referral if referral code provided
+        const { referralCode } = req.body;
+        if (referralCode && !isAdmin) {
+            try {
+                const ReferralService = require('../services/referralService');
+                await ReferralService.processReferral(newUser.id, referralCode);
+            } catch (referralError) {
+                console.error('Referral processing error (non-blocking):', referralError);
+                // Don't fail user creation if referral processing fails
+            }
+        }
+
         res.status(201).json({
             message: 'Account created successfully',
             user: {

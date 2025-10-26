@@ -117,10 +117,10 @@ router.post('/crypto-to-gold', auth.authenticateToken, async (req, res) => {
     );
 
     // Create transaction record (ledger) using meta JSON
-    await client.query(
+    const transactionResult = await client.query(
       `INSERT INTO transactions_ledger (
         user_id, type, currency, amount, reference_id, meta, created_at
-      ) VALUES ($1, 'buy_gold', $2, $3, $4, $5, NOW())`,
+      ) VALUES ($1, 'buy_gold', $2, $3, $4, $5, NOW()) RETURNING id`,
       [
         userId,
         upperSymbol,
@@ -135,6 +135,21 @@ router.post('/crypto-to-gold', auth.authenticateToken, async (req, res) => {
         })
       ]
     );
+
+    // Process referral commission
+    try {
+      const ReferralService = require('../services/referralService');
+      await ReferralService.processTransactionCommission(
+        transactionResult.rows[0].id,
+        userId,
+        'buy_gold',
+        cryptoAmount,
+        upperSymbol
+      );
+    } catch (referralError) {
+      console.error('Referral commission error (non-blocking):', referralError);
+      // Don't fail the transaction if referral processing fails
+    }
 
     await client.query('COMMIT');
 
@@ -264,10 +279,10 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
     );
 
     // Create transaction record (ledger) using meta JSON
-    await client.query(
+    const transactionResult = await client.query(
       `INSERT INTO transactions_ledger (
         user_id, type, currency, amount, reference_id, meta, created_at
-      ) VALUES ($1, 'sell_gold', $2, $3, $4, $5, NOW())`,
+      ) VALUES ($1, 'sell_gold', $2, $3, $4, $5, NOW()) RETURNING id`,
       [
         userId,
         upperSymbol,
@@ -282,6 +297,21 @@ router.post('/gold-to-crypto', auth.authenticateToken, async (req, res) => {
         })
       ]
     );
+
+    // Process referral commission
+    try {
+      const ReferralService = require('../services/referralService');
+      await ReferralService.processTransactionCommission(
+        transactionResult.rows[0].id,
+        userId,
+        'sell_gold',
+        netCryptoAmount,
+        upperSymbol
+      );
+    } catch (referralError) {
+      console.error('Referral commission error (non-blocking):', referralError);
+      // Don't fail the transaction if referral processing fails
+    }
 
     await client.query('COMMIT');
 

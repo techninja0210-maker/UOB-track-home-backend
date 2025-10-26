@@ -103,6 +103,7 @@ app.use('/api/crowdfunding', require('./routes/crowdfunding'));
 app.use('/api/withdrawals', require('./routes/withdrawals'));
 app.use('/api/user', require('./routes/account-settings'));
 app.use('/api/admin', require('./routes/account-settings'));
+app.use('/api/referrals', require('./routes/referrals'));
 
 // Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));
