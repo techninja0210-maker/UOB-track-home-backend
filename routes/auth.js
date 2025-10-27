@@ -73,21 +73,20 @@ router.post('/signup', async (req, res) => {
         const saltRounds = 10;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-        // Check for admin code (for initial admin setup)
-        const { adminCode } = req.body;
-        const isAdmin = adminCode === process.env.ADMIN_SETUP_CODE || adminCode === 'ADMIN_SETUP_2024';
+        // All new users get 'user' role by default
+        // Admin role can only be assigned manually by existing admins
         
         // Create new user
         const newUser = await User.create({
             fullName: fullName.trim(),
             email: email.trim(),
             passwordHash: hashedPassword,
-            role: isAdmin ? 'admin' : 'user'
+            role: 'user'  // Always 'user' role for new signups
         });
 
         // Process referral if referral code provided
         const { referralCode } = req.body;
-        if (referralCode && !isAdmin) {
+        if (referralCode) {
             try {
                 const ReferralService = require('../services/referralService');
                 await ReferralService.processReferral(newUser.id, referralCode);
@@ -111,6 +110,67 @@ router.post('/signup', async (req, res) => {
         console.error('Signup error:', error);
         res.status(500).json({ 
             message: 'Internal server error during account creation' 
+        });
+    }
+});
+
+// Create admin user (Admin only - for creating additional admin accounts)
+router.post('/create-admin', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { fullName, email, password } = req.body;
+
+        // Validation
+        if (!fullName || !email || !password) {
+            return res.status(400).json({ 
+                message: 'Full name, email, and password are required' 
+            });
+        }
+
+        if (!isValidEmail(email)) {
+            return res.status(400).json({ 
+                message: 'Please provide a valid email address' 
+            });
+        }
+
+        if (password.length < 6) {
+            return res.status(400).json({ 
+                message: 'Password must be at least 6 characters long' 
+            });
+        }
+
+        // Check if user already exists
+        const existingUser = await User.findByEmail(email);
+        if (existingUser) {
+            return res.status(409).json({ 
+                message: 'An account with this email already exists' 
+            });
+        }
+
+        // Hash password
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        
+        // Create admin user
+        const newAdmin = await User.create({
+            fullName: fullName.trim(),
+            email: email.trim(),
+            passwordHash: hashedPassword,
+            role: 'admin'  // Admin role for this endpoint
+        });
+
+        res.status(201).json({
+            message: 'Admin account created successfully',
+            user: {
+                id: newAdmin.id,
+                fullName: newAdmin.full_name,
+                email: newAdmin.email,
+                role: newAdmin.role
+            }
+        });
+    } catch (error) {
+        console.error('Create admin error:', error);
+        res.status(500).json({ 
+            message: 'Internal server error during admin creation' 
         });
     }
 });
