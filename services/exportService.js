@@ -2,6 +2,19 @@ const { createObjectCsvStringifier } = require('csv-writer');
 const PDFDocument = require('pdfkit');
 const { query } = require('../config/database');
 
+// Helper function for safe date formatting
+function formatDate(date, format = 'en-US') {
+  try {
+    if (!date) return 'N/A';
+    const dateObj = new Date(date);
+    if (isNaN(dateObj.getTime())) return 'Invalid Date';
+    return dateObj.toLocaleDateString(format);
+  } catch (error) {
+    console.error('Date formatting error:', error);
+    return 'Invalid Date';
+  }
+}
+
 class ExportService {
   /**
    * Export transactions to CSV
@@ -179,7 +192,7 @@ class ExportService {
           gh.purchase_price_per_gram,
           gh.total_paid_usd
         FROM gold_holdings gh
-        WHERE gh.user_id = $1 AND gh.status IN ('holding', 'active')
+        WHERE gh.user_id = $1 AND gh.status IN ('holding', 'selected')
         ORDER BY gh.created_at DESC`,
         [userId]
       );
@@ -368,7 +381,7 @@ class ExportService {
             gh.total_paid_usd,
             gh.gold_security_id
           FROM gold_holdings gh
-          WHERE gh.user_id = $1 AND gh.status IN ('holding', 'active')
+          WHERE gh.user_id = $1 AND gh.status IN ('holding', 'selected')
           ORDER BY gh.created_at DESC`,
           [userId]
         );
@@ -493,6 +506,7 @@ class ExportService {
   async generateIndividualSKRPDF(userId, userName, userEmail, skrId) {
     return new Promise(async (resolve, reject) => {
       try {
+        // Get SKR data from database
         const result = await query(
           `SELECT 
             gh.id,
@@ -504,7 +518,7 @@ class ExportService {
             gh.total_paid_usd,
             gh.gold_security_id
           FROM gold_holdings gh
-          WHERE gh.user_id = $1 AND gh.id = $2 AND gh.status IN ('holding', 'active')`,
+          WHERE gh.user_id = $1 AND gh.id = $2`,
           [userId, skrId]
         );
 
@@ -513,85 +527,74 @@ class ExportService {
         }
 
         const skr = result.rows[0];
-        const doc = new PDFDocument({ margin: 50 });
-        const chunks = [];
 
+        // Create professional SKR PDF without problematic operations
+        const doc = new PDFDocument();
+        const chunks = [];
+        
         doc.on('data', chunk => chunks.push(chunk));
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
 
-        // Add watermark background
-        doc.save();
-        doc.rotate(-45, { origin: [300, 400] });
-        doc.fontSize(60).fillColor('#FFD700', 0.1).text('UOB SECURITY HOUSE', 50, 300);
-        doc.restore();
-
-        // Header with logo placeholder and company info
-        doc.rect(50, 50, 500, 80).stroke('#FFD700', 2);
-        doc.fontSize(24).fillColor('#FFD700').text('UOB SECURITY HOUSE', 70, 70);
-        doc.fontSize(12).fillColor('#000').text('Secure Gold Trading Platform', 70, 95);
-        doc.fontSize(10).fillColor('#666').text('Licensed Gold Trading & Storage', 70, 110);
-
-        // Document title and number
-        doc.moveDown(2);
-        doc.fontSize(18).fillColor('#000').text('SECURE KEY RECEIPT (SKR)', { align: 'center' });
-        doc.fontSize(14).fillColor('#FFD700').text(`Document No: ${skr.receipt_number}`, { align: 'center' });
-        doc.moveDown();
-
-        // Security border
-        doc.rect(50, doc.y, 500, 200).stroke('#FFD700', 1);
-        doc.rect(55, doc.y + 5, 490, 190).stroke('#000', 0.5);
-
-        // SKR Details section
-        doc.fontSize(12).fillColor('#000').text('GOLD HOLDING DETAILS', 60, doc.y + 15);
-        doc.moveDown(0.5);
+        // Create clean professional single-page SKR PDF
+        // Add logo with proper aspect ratio (not too wide)
+        try {
+          doc.image('../frontend/public/UOB_logo.png', 50, 30, { width: 40, height: 30 });
+        } catch (error) {
+          console.log('Logo not found, using text header instead:', error.message);
+        }
         
-        const startY = doc.y;
-        doc.fontSize(10).fillColor('#000')
-          .text(`Receipt Number: ${skr.receipt_number}`, 60, startY)
-          .text(`Gold Weight: ${skr.gold_grams} grams`, 60, startY + 15)
-          .text(`Gold Purity: 999.9 (24K)`, 60, startY + 30)
-          .text(`Purchase Price: $${skr.purchase_price_per_gram || 0}/gram`, 60, startY + 45)
-          .text(`Total Paid: $${skr.total_paid_usd || 0}`, 60, startY + 60)
-          .text(`Status: ${skr.status.toUpperCase()}`, 60, startY + 75)
-          .text(`Issue Date: ${new Date(skr.issue_date).toLocaleDateString()}`, 60, startY + 90)
-          .text(`Valid Until: ${new Date(new Date(skr.issue_date).getTime() + 365*24*60*60*1000).toLocaleDateString()}`, 60, startY + 105);
-
-        // Owner information
-        doc.moveDown(2);
-        doc.fontSize(12).fillColor('#000').text('HOLDER INFORMATION', 60, doc.y);
-        doc.moveDown(0.5);
-        doc.fontSize(10).fillColor('#000')
-          .text(`Name: ${userName}`, 60, doc.y)
-          .text(`Email: ${userEmail}`, 60, doc.y + 15)
-          .text(`Document Generated: ${new Date().toLocaleString()}`, 60, doc.y + 30);
-
-        // Security features
-        doc.moveDown(2);
-        doc.fontSize(12).fillColor('#000').text('SECURITY FEATURES', 60, doc.y);
-        doc.moveDown(0.5);
-        doc.fontSize(9).fillColor('#666')
-          .text('• This document is digitally signed and encrypted', 60, doc.y)
-          .text('• Unique SKR number for verification', 60, doc.y + 12)
-          .text('• Tamper-evident design with security borders', 60, doc.y + 24)
-          .text('• Blockchain-verified gold holdings', 60, doc.y + 36);
-
-        // Legal disclaimer
-        doc.moveDown(2);
-        doc.fontSize(10).fillColor('#000').text('LEGAL DISCLAIMER', 60, doc.y);
-        doc.moveDown(0.3);
-        doc.fontSize(8).fillColor('#666')
-          .text('This Secure Key Receipt represents ownership of physical gold stored in secure facilities.', 60, doc.y, { width: 480 })
-          .text('UOB Security House maintains full insurance coverage for all stored assets.', 60, doc.y + 10, { width: 480 })
-          .text('For verification, contact: support@uobsecurityhouse.com', 60, doc.y + 20, { width: 480 });
-
-        // Footer with company details
-        doc.moveDown(2);
-        doc.rect(50, doc.y, 500, 40).stroke('#FFD700', 1);
-        doc.fontSize(8).fillColor('#666')
-          .text('UOB Security House - Licensed Gold Trading Platform', 60, doc.y + 10, { align: 'center' })
-          .text('www.uobsecurityhouse.com | support@uobsecurityhouse.com', 60, doc.y + 20, { align: 'center' })
-          .text(`Document ID: ${skr.id} | Generated: ${new Date().toISOString()}`, 60, doc.y + 30, { align: 'center' });
+        // Header section - pure black color using hex
+        doc.fillColor('#000000').fontSize(20).text('UOB SECURITY HOUSE', 120, 40);
+        doc.fillColor('#000000').fontSize(14).text('Licensed Gold Trading Platform', 120, 65);
+        
+        // Receipt information - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(12).text(`Safekeeping Receipt # ${skr.receipt_number || 'N/A'}`, 50, 90);
+        doc.fillColor(0, 0, 0).fontSize(12).text('For Gold Security Holder', 50, 110);
+        doc.fillColor(0, 0, 0).fontSize(12).text(`Date: ${new Date(skr.issue_date).toLocaleDateString()}`, 50, 130);
+        
+        // Introduction - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(11).text('This safekeeping receipt is evidence that UOB Security House is holding the following gold security in secure storage:', 50, 160, { width: 500 });
+        
+        // Security details - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(11).text(`Company Name: ${userName || 'N/A'}`, 50, 200);
+        doc.fillColor(0, 0, 0).fontSize(11).text('Security Description: Physical Gold Bullion', 50, 220);
+        doc.fillColor(0, 0, 0).fontSize(11).text(`Cusip: ${skr.receipt_number || 'N/A'}`, 50, 240);
+        doc.fillColor(0, 0, 0).fontSize(11).text(`Weight: ${skr.gold_grams ? parseFloat(skr.gold_grams).toFixed(4) : '0.0000'} grams`, 50, 260);
+        doc.fillColor(0, 0, 0).fontSize(11).text('Account No. ________________', 50, 280);
+        
+        // Restriction section - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(11).text('Restriction:', 50, 320);
+        doc.fillColor(0, 0, 0).fontSize(10).text(`${userName || 'N/A'}`, 50, 340);
+        doc.fillColor(0, 0, 0).fontSize(10).text('Pledged for Gold Security Holdings', 50, 360);
+        doc.fillColor(0, 0, 0).fontSize(10).text(`Status: ${(skr.status || 'ACTIVE').toUpperCase()}`, 50, 380);
+        doc.fillColor(0, 0, 0).fontSize(10).text('This security can not be withdrawn or replaced', 50, 400);
+        doc.fillColor(0, 0, 0).fontSize(10).text('Without the written consent of UOB Security House', 50, 420);
+        
+        // Market value - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(11).text(`Market Value at purchase $${skr.total_paid_usd ? parseFloat(skr.total_paid_usd).toFixed(2) : '0.00'}`, 50, 460);
+        
+        // Signature section - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(11).text('UOB Security House Seal', 50, 500);
+        doc.fillColor(0, 0, 0).fontSize(11).text('Signature: ________________', 300, 500);
+        doc.fillColor(0, 0, 0).fontSize(11).text('Name: UOB SECURITY HOUSE', 300, 520);
+        doc.fillColor(0, 0, 0).fontSize(11).text('Officer Title: Chief Security Officer', 300, 540);
+        
+        // Footer - FORCE pure black color using RGB
+        doc.fillColor(0, 0, 0).fontSize(9).text('UOB Security House - Licensed Gold Trading Platform', { align: 'center' });
+        doc.fillColor(0, 0, 0).fontSize(9).text('Email: support@uobsecurityhouse.com | Phone: +1-800-UOB-GOLD', { align: 'center' });
+        
+        // Add subtle diagonal watermark with "UOB" text LAST (after all content)
+        doc.fontSize(35).fillColor('#D0D0D0', 0.15);
+        // Create diagonal watermark pattern with "UOB" - visible but subtle
+        for (let i = 0; i < 5; i++) {
+          for (let j = 0; j < 3; j++) {
+            doc.text('UOB', 100 + (i * 150), 150 + (j * 150), { 
+              angle: 45,
+              opacity: 0.15
+            });
+          }
+        }
 
         doc.end();
       } catch (error) {

@@ -141,21 +141,45 @@ router.get('/skrs/:skrId/pdf', auth.authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const skrId = req.params.skrId;
+    const isAdmin = req.user.role === 'admin';
     
-    // Fetch full user data from database
-    const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+    let targetUserId = userId;
+    let targetUser = req.user;
+    
+    // If admin, get the SKR owner's details
+    if (isAdmin) {
+      const skrResult = await query('SELECT user_id FROM gold_holdings WHERE id = $1', [skrId]);
+      if (skrResult.rows.length === 0) {
+        return res.status(404).json({ message: 'SKR not found' });
+      }
+      targetUserId = skrResult.rows[0].user_id;
+      
+      const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [targetUserId]);
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({ message: 'SKR owner not found' });
+      }
+      targetUser = userResult.rows[0];
+    } else {
+      // For regular users, fetch their own data
+      const userResult = await query('SELECT full_name, email FROM users WHERE id = $1', [userId]);
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      targetUser = userResult.rows[0];
     }
-    
-    const user = userResult.rows[0];
 
-    console.log('Individual SKR PDF request:', { userId, skrId, userEmail: user.email });
+    console.log('Individual SKR PDF request:', { 
+      requestingUserId: userId, 
+      targetUserId, 
+      skrId, 
+      userEmail: targetUser.email,
+      isAdmin 
+    });
 
     const pdfBuffer = await exportService.generateIndividualSKRPDF(
-      userId,
-      user.full_name,
-      user.email,
+      targetUserId,
+      targetUser.full_name,
+      targetUser.email,
       skrId
     );
 
