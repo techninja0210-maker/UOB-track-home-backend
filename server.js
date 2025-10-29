@@ -75,6 +75,14 @@ const authRoutes = require('./routes/auth');
 const cryptoPriceService = require('./services/cryptoPriceService');
 cryptoPriceService.startPriceUpdates(60000); // Update every minute
 
+// Start market data collection for AI trading
+// const marketDataService = require('./services/marketDataService');
+// marketDataService.startDataCollection(['BTCUSDT', 'ETHUSDT'], '1h');
+
+// Initialize AI trading bot engine
+// const botEngineService = require('./services/botEngineService');
+// botEngineService.initializeBotEngine();
+
 // Start pool wallet blockchain monitoring
 const poolBlockchainMonitor = require('./services/poolBlockchainMonitor');
 // Start monitoring after a 10-second delay (allow server to fully initialize)
@@ -104,6 +112,7 @@ app.use('/api/withdrawals', require('./routes/withdrawals'));
 app.use('/api/user', require('./routes/account-settings'));
 app.use('/api/admin', require('./routes/account-settings'));
 app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/ai-trading', authRoutes.authenticateToken, require('./routes/aiTrading'));
 
 // Protected admin routes (authentication + admin role required)
 app.use('/api/admin', authRoutes.authenticateToken, authRoutes.requireAdmin, require('./routes/admin'));
