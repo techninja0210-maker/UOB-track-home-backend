@@ -56,12 +56,14 @@ class CryptoPriceService {
   // Fetch prices from CoinGecko API (fallback)
   async fetchPricesFromCoinGecko() {
     try {
+      console.log('🔄 Fetching prices from CoinGecko API...');
       const response = await axios.get(
         'https://api.coingecko.com/api/v3/simple/price',
         {
           params: {
-            ids: 'bitcoin,ethereum,tether',
-            vs_currencies: 'usd'
+            ids: 'bitcoin,ethereum,tether,cardano,solana',
+            vs_currencies: 'usd',
+            include_24hr_change: true
           },
           timeout: 15000, // Increased timeout
           headers: {
@@ -70,13 +72,32 @@ class CryptoPriceService {
         }
       );
 
-      return {
+      const result = {
         BTC: response.data.bitcoin.usd,
         ETH: response.data.ethereum.usd,
-        USDT: response.data.tether.usd
+        USDT: response.data.tether.usd,
+        ADA: response.data.cardano.usd,
+        SOL: response.data.solana.usd,
+        // Store 24h change data
+        BTC_change24h: response.data.bitcoin.usd_24h_change || 0,
+        ETH_change24h: response.data.ethereum.usd_24h_change || 0,
+        ADA_change24h: response.data.cardano.usd_24h_change || 0,
+        SOL_change24h: response.data.solana.usd_24h_change || 0
       };
+
+      console.log('✅ CoinGecko API Success - Prices fetched:');
+      console.log(`   BTC: $${result.BTC.toLocaleString()} (${result.BTC_change24h > 0 ? '+' : ''}${result.BTC_change24h.toFixed(2)}%)`);
+      console.log(`   ETH: $${result.ETH.toLocaleString()} (${result.ETH_change24h > 0 ? '+' : ''}${result.ETH_change24h.toFixed(2)}%)`);
+      console.log(`   ADA: $${result.ADA.toLocaleString()} (${result.ADA_change24h > 0 ? '+' : ''}${result.ADA_change24h.toFixed(2)}%)`);
+      console.log(`   SOL: $${result.SOL.toLocaleString()} (${result.SOL_change24h > 0 ? '+' : ''}${result.SOL_change24h.toFixed(2)}%)`);
+
+      return result;
     } catch (error) {
-      console.error('CoinGecko API error:', error.message);
+      console.error('❌ CoinGecko API error:', error.message);
+      if (error.response) {
+        console.error('   Response status:', error.response.status);
+        console.error('   Response data:', error.response.data);
+      }
       return null;
     }
   }
@@ -180,11 +201,19 @@ class CryptoPriceService {
       }
     }
 
-    // Always try to get fresh data from Binance API first for real-time accuracy
-    console.log('🔄 Fetching fresh real-time data from Binance API...');
+    // Check if we should skip Binance API (for deployment environments)
+    const skipBinance = process.env.SKIP_BINANCE_API === 'true' || process.env.NODE_ENV === 'production';
     
-    // Fetch fresh prices - try Binance first (most real-time and accurate)
-    const binanceData = await this.fetchPricesFromBinance();
+    let binanceData = null;
+    if (!skipBinance) {
+      // Always try to get fresh data from Binance API first for real-time accuracy
+      console.log('🔄 Fetching fresh real-time data from Binance API...');
+      
+      // Fetch fresh prices - try Binance first (most real-time and accurate)
+      binanceData = await this.fetchPricesFromBinance();
+    } else {
+      console.log('🔄 Skipping Binance API (deployment environment), trying CoinGecko...');
+    }
     
     if (binanceData) {
       console.log('✅ Using fresh Binance API data');
@@ -224,20 +253,27 @@ class CryptoPriceService {
         lastUpdate: new Date(now)
       };
     } else {
-      console.log('⚠️ Binance API failed, trying database cache...');
+      console.log('⚠️ Binance API failed, trying CoinGecko API...');
       
-      // Fallback to database prices
-      let prices = await this.getPricesFromDatabase();
+      // Try CoinGecko API immediately for deployment environments
+      let prices = await this.fetchPricesFromCoinGecko();
       
-      if (!prices || Object.keys(prices).length === 0) {
-        console.log('⚠️ No database prices, trying CoinGecko...');
-        // Fallback to CoinGecko if Binance fails
-        prices = await this.fetchPricesFromCoinGecko();
+      if (prices) {
+        console.log('✅ Using CoinGecko API data');
         
-        if (prices) {
-          console.log('✅ Using CoinGecko API data');
-        } else {
-          console.log('⚠️ CoinGecko API failed, trying Noones...');
+        // Store 24h change data from CoinGecko
+        this.priceCache.set('BTC_change24h', prices.BTC_change24h || 0);
+        this.priceCache.set('ETH_change24h', prices.ETH_change24h || 0);
+        this.priceCache.set('ADA_change24h', prices.ADA_change24h || 0);
+        this.priceCache.set('SOL_change24h', prices.SOL_change24h || 0);
+      } else {
+        console.log('⚠️ CoinGecko API failed, trying database cache...');
+        
+        // Fallback to database prices
+        prices = await this.getPricesFromDatabase();
+        
+        if (!prices || Object.keys(prices).length === 0) {
+          console.log('⚠️ No database prices, trying Noones...');
           // Fallback to Noones if both fail
           prices = await this.fetchPricesFromNoones();
           if (prices) {
@@ -245,14 +281,15 @@ class CryptoPriceService {
           } else {
             console.log('❌ All APIs failed, using fallback prices');
           }
+        } else {
+          console.log('✅ Using cached prices from database');
         }
-      } else {
-        console.log('✅ Using cached prices from database');
       }
 
       // Final fallback to default prices
       if (!prices || Object.keys(prices).length === 0) {
-        prices = { BTC: 60000, ETH: 3000, USDT: 1.0 };
+        console.log('🔄 Using fallback prices for deployment');
+        prices = { BTC: 112547, ETH: 3972, USDT: 1.0, ADA: 0.45, SOL: 98.50 };
       }
 
       // Update cache
