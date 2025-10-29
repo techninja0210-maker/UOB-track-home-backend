@@ -49,12 +49,8 @@ pool.query('SELECT NOW()', (err, res) => {
     console.log('✅ PostgreSQL database connected successfully');
     console.log('📊 Database time:', res.rows[0].now);
     
-    // Initialize crowdfunding tables
-    const initCrowdfunding = require('./init-crowdfunding');
-    initCrowdfunding().catch(err => {
-      console.error('❌ Crowdfunding initialization error:', err);
-      // Don't exit - server can still run
-    });
+    // Crowdfunding tables are initialized via final-init.sql
+    console.log('✅ Crowdfunding tables initialized via database schema');
     
     // Create withdrawal_requests table if it doesn't exist
     createWithdrawalTable();
