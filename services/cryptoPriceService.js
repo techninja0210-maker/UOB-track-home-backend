@@ -4,7 +4,41 @@ const axios = require('axios');
 class CryptoPriceService {
   constructor() {
     this.priceCache = new Map();
-    this.cacheExpiry = 30000; // 30 second cache for more real-time data
+    this.cacheExpiry = 60 * 1000; // 60 seconds (increased to reduce API calls)
+    this.lastRequestTime = 0;
+    this.minRequestInterval = 2000; // Minimum 2 seconds between requests
+    this.requestCount = 0;
+    this.requestWindow = 60 * 1000; // 1 minute window
+    this.maxRequestsPerMinute = 30; // Conservative limit
+  }
+
+  // Rate limiting helper
+  async checkRateLimit() {
+    const now = Date.now();
+    
+    // Reset counter if window has passed
+    if (now - this.lastRequestTime > this.requestWindow) {
+      this.requestCount = 0;
+    }
+    
+    // Check if we've exceeded the limit
+    if (this.requestCount >= this.maxRequestsPerMinute) {
+      const waitTime = this.requestWindow - (now - this.lastRequestTime);
+      console.log(`⚠️ Rate limit reached. Waiting ${Math.ceil(waitTime / 1000)} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      this.requestCount = 0;
+    }
+    
+    // Ensure minimum interval between requests
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    if (timeSinceLastRequest < this.minRequestInterval) {
+      const waitTime = this.minRequestInterval - timeSinceLastRequest;
+      console.log(`⏳ Rate limiting: waiting ${waitTime}ms...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    this.lastRequestTime = Date.now();
+    this.requestCount++;
   }
 
   // Fetch prices from Noones API (primary source)
@@ -56,21 +90,34 @@ class CryptoPriceService {
   // Fetch prices from CoinGecko API (fallback)
   async fetchPricesFromCoinGecko() {
     try {
-      console.log('🔄 Fetching prices from CoinGecko API...');
-      const response = await axios.get(
-        'https://api.coingecko.com/api/v3/simple/price',
-        {
-          params: {
-            ids: 'bitcoin,ethereum,tether,cardano,solana',
-            vs_currencies: 'usd',
-            include_24hr_change: true
-          },
-          timeout: 15000, // Increased timeout
-          headers: {
-            'User-Agent': 'TrackPlatform/1.0'
-          }
+      // Use Pro API if key is available, otherwise use free tier
+      const apiKey = process.env.COINGECKO_API_KEY;
+      const baseUrl = apiKey ? 'https://pro-api.coingecko.com/api/v3' : 'https://api.coingecko.com/api/v3';
+      
+      if (apiKey) {
+        console.log('🔄 Fetching prices from CoinGecko Pro API...');
+      } else {
+        console.log('🔄 Fetching prices from CoinGecko Free API...');
+      }
+      
+      const params = {
+        ids: 'bitcoin,ethereum,tether,cardano,solana',
+        vs_currencies: 'usd',
+        include_24hr_change: true
+      };
+      
+      // Add API key to params if available
+      if (apiKey) {
+        params.x_cg_pro_api_key = apiKey;
+      }
+      
+      const response = await axios.get(`${baseUrl}/simple/price`, {
+        params,
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'TrackPlatform/1.0'
         }
-      );
+      });
 
       const result = {
         BTC: response.data.bitcoin.usd,
@@ -105,55 +152,62 @@ class CryptoPriceService {
   // Fetch prices from Binance API (primary source for real-time data)
   async fetchPricesFromBinance() {
     try {
+      // Apply rate limiting
+      await this.checkRateLimit();
+      
       console.log('🔄 Fetching real-time prices from Binance API...');
       
-      const [btc, eth, ada, sol] = await Promise.all([
-        axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT', {
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'TrackPlatform/1.0',
-            'Accept': 'application/json'
-          }
-        }),
-        axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT', {
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'TrackPlatform/1.0',
-            'Accept': 'application/json'
-          }
-        }),
-        axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=ADAUSDT', {
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'TrackPlatform/1.0',
-            'Accept': 'application/json'
-          }
-        }),
-        axios.get('https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT', {
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'TrackPlatform/1.0',
-            'Accept': 'application/json'
-          }
-        })
-      ]);
+      // Get API credentials
+      const apiKey = process.env.EXCHANGE_API_KEY || process.env.BINANCE_API_KEY;
+      const apiSecret = process.env.EXCHANGE_API_SECRET || process.env.BINANCE_SECRET_KEY;
+      
+      // Prepare headers
+      const headers = {
+        'User-Agent': 'TrackPlatform/1.0',
+        'Accept': 'application/json'
+      };
+      
+      // Add API key to headers if available
+      if (apiKey && apiKey !== 'your_binance_api_key_here' && apiKey !== 'your_exchange_api_key_here') {
+        headers['X-MBX-APIKEY'] = apiKey;
+        console.log('🔑 Using Binance API key for enhanced rate limits');
+      } else {
+        console.log('⚠️ No Binance API key found, using public endpoints');
+      }
+      
+      // Use single API call instead of multiple parallel calls to reduce rate limit usage
+      // Binance supports multiple symbols in one request
+      const response = await axios.get('https://api.binance.com/api/v3/ticker/24hr', {
+        params: {
+          symbols: JSON.stringify(['BTCUSDT', 'ETHUSDT', 'ADAUSDT', 'SOLUSDT'])
+        },
+        timeout: 15000,
+        headers
+      });
+      
+      // Process the response data
+      const data = response.data;
+      const btc = data.find(item => item.symbol === 'BTCUSDT');
+      const eth = data.find(item => item.symbol === 'ETHUSDT');
+      const ada = data.find(item => item.symbol === 'ADAUSDT');
+      const sol = data.find(item => item.symbol === 'SOLUSDT');
 
       const result = {
         BTC: {
-          price: parseFloat(btc.data.lastPrice),
-          change24h: parseFloat(btc.data.priceChangePercent)
+          price: parseFloat(btc.lastPrice),
+          change24h: parseFloat(btc.priceChangePercent)
         },
         ETH: {
-          price: parseFloat(eth.data.lastPrice),
-          change24h: parseFloat(eth.data.priceChangePercent)
+          price: parseFloat(eth.lastPrice),
+          change24h: parseFloat(eth.priceChangePercent)
         },
         ADA: {
-          price: parseFloat(ada.data.lastPrice),
-          change24h: parseFloat(ada.data.priceChangePercent)
+          price: parseFloat(ada.lastPrice),
+          change24h: parseFloat(ada.priceChangePercent)
         },
         SOL: {
-          price: parseFloat(sol.data.lastPrice),
-          change24h: parseFloat(sol.data.priceChangePercent)
+          price: parseFloat(sol.lastPrice),
+          change24h: parseFloat(sol.priceChangePercent)
         },
         USDT: {
           price: 1.0,
@@ -173,6 +227,11 @@ class CryptoPriceService {
       if (error.response) {
         console.error('   Response status:', error.response.status);
         console.error('   Response data:', error.response.data);
+        
+        // If rate limited, suggest using CoinGecko
+        if (error.response.status === 429) {
+          console.log('⚠️ Binance rate limit exceeded. Consider using CoinGecko API as fallback.');
+        }
       }
       return null;
     }
@@ -201,19 +260,11 @@ class CryptoPriceService {
       }
     }
 
-    // Check if we should skip Binance API (for deployment environments)
-    const skipBinance = process.env.SKIP_BINANCE_API === 'true' || process.env.NODE_ENV === 'production';
+    // Always try to get fresh data from Binance API first for real-time accuracy
+    console.log('🔄 Fetching fresh real-time data from Binance API...');
     
-    let binanceData = null;
-    if (!skipBinance) {
-      // Always try to get fresh data from Binance API first for real-time accuracy
-      console.log('🔄 Fetching fresh real-time data from Binance API...');
-      
-      // Fetch fresh prices - try Binance first (most real-time and accurate)
-      binanceData = await this.fetchPricesFromBinance();
-    } else {
-      console.log('🔄 Skipping Binance API (deployment environment), trying CoinGecko...');
-    }
+    // Fetch fresh prices - try Binance first (most real-time and accurate)
+    const binanceData = await this.fetchPricesFromBinance();
     
     if (binanceData) {
       console.log('✅ Using fresh Binance API data');
@@ -255,7 +306,7 @@ class CryptoPriceService {
     } else {
       console.log('⚠️ Binance API failed, trying CoinGecko API...');
       
-      // Try CoinGecko API immediately for deployment environments
+      // Fallback to CoinGecko API
       let prices = await this.fetchPricesFromCoinGecko();
       
       if (prices) {
@@ -288,7 +339,7 @@ class CryptoPriceService {
 
       // Final fallback to default prices
       if (!prices || Object.keys(prices).length === 0) {
-        console.log('🔄 Using fallback prices for deployment');
+        console.log('🔄 Using fallback prices');
         prices = { BTC: 112547, ETH: 3972, USDT: 1.0, ADA: 0.45, SOL: 98.50 };
       }
 
