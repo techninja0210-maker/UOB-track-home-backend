@@ -43,8 +43,8 @@ app.use((req, res, next) => {
 // Test database connection
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('❌ Database connection error:', err);
-    process.exit(1);
+    console.error('❌ Database connection error (non-fatal, continuing):', err);
+    // Do not exit; allow server to run and endpoints to return 5xx instead of crashing
   } else {
     console.log('✅ PostgreSQL database connected successfully');
     console.log('📊 Database time:', res.rows[0].now);
@@ -59,7 +59,10 @@ pool.query('SELECT NOW()', (err, res) => {
 
 // Initialize pool wallets
 const poolWalletService = require('./services/poolWalletService');
-poolWalletService.initializePoolWallets().catch(err => {
+let poolWalletsReady = false;
+poolWalletService.initializePoolWallets().then(() => {
+  poolWalletsReady = true;
+}).catch(err => {
   console.error('❌ Pool wallet initialization error:', err);
   // Don't exit - server can still run without pool wallets
 });
@@ -76,14 +79,20 @@ cryptoPriceService.startPriceUpdates(60000); // Update every minute
 // marketDataService.startDataCollection(['BTCUSDT', 'ETHUSDT'], '1h');
 
 // Initialize AI trading bot engine
-// const botEngineService = require('./services/botEngineService');
-// botEngineService.initializeBotEngine();
+const botEngineService = require('./services/botEngineService');
+botEngineService.initializeBotEngine();
 
 // Start pool wallet blockchain monitoring
 const poolBlockchainMonitor = require('./services/poolBlockchainMonitor');
 // Start monitoring after a 10-second delay (allow server to fully initialize)
 setTimeout(() => {
-  poolBlockchainMonitor.startMonitoring().catch(console.error);
+  if (!poolWalletsReady) {
+    console.warn('⏸️ Skipping blockchain monitoring start: pool wallets not initialized');
+    return;
+  }
+  poolBlockchainMonitor.startMonitoring().catch(err => {
+    console.error('Blockchain monitor error (non-fatal):', err);
+  });
 }, 10000);
 
 // Initialize WebSocket notifications

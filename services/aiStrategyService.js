@@ -35,7 +35,7 @@ class AIStrategyService {
     }
   }
 
-  // Gold: Buy low / Sell high strategy using gold price history (price per gram USD)
+  // Gold: Buy low / Sell high strategy with Bollinger Bands + RSI + trend filter
   async goldBuyLowSellHighStrategy(symbol, params = {}) {
     try {
       // Force symbol to XAUUSD context
@@ -43,7 +43,18 @@ class AIStrategyService {
         symbol = 'XAUUSD';
       }
 
-      const { shortPeriod = 20, longPeriod = 50, buyDipPct = 0.5, takeProfitPct = 1.0, stopLossPct = 1.0 } = params;
+      const {
+        shortPeriod = 20,
+        longPeriod = 50,
+        bbPeriod = 20,
+        bbStdDev = 2,
+        rsiPeriod = 14,
+        rsiBuy = 45,
+        rsiSell = 55,
+        minTakeProfitPct = 0.8,
+        stopLossPct = 0.6,
+        cooldownMinutes = 5
+      } = params;
 
       // Load recent gold price series from DB via prices history table if available
       // Fallback to current price repeated if no history
@@ -70,6 +81,8 @@ class AIStrategyService {
 
       const smaShort = marketDataService.calculateSMA(prices, shortPeriod);
       const smaLong = marketDataService.calculateSMA(prices, longPeriod);
+      const bb = marketDataService.calculateBollingerBands(prices, bbPeriod, bbStdDev);
+      const rsi = marketDataService.calculateRSI(prices, rsiPeriod);
       const currentPrice = prices[prices.length - 1];
 
       const signal = {
@@ -80,38 +93,74 @@ class AIStrategyService {
         technical_indicators: {
           sma_short: smaShort,
           sma_long: smaLong,
+          bollinger: bb,
+          rsi,
           current_price: currentPrice
         }
       };
 
-      // Buy condition: price below long SMA by buyDipPct and short SMA turning up
-      const belowLongPct = ((smaLong - currentPrice) / smaLong) * 100;
-      const smaSlopeUp = prices.slice(-3).reduce((acc, v, i, arr) => i ? acc + (v - arr[i-1]) : acc, 0) > 0;
-      if (belowLongPct >= buyDipPct && smaShort <= smaLong && smaSlopeUp) {
-        signal.type = 'buy';
-        signal.confidence = Math.min(0.9, belowLongPct / (buyDipPct || 0.5));
-        signal.reason = `Gold dip: ${belowLongPct.toFixed(2)}% below SMA${longPeriod} with momentum up`;
-        return signal;
+      // Cooldown after last trade to avoid churn
+      try {
+        const lastTrade = await this.getLastTradeForSymbol('XAUUSD');
+        if (lastTrade && lastTrade.created_at) {
+          const lastTs = new Date(lastTrade.created_at).getTime();
+          if (Date.now() - lastTs < cooldownMinutes * 60 * 1000) {
+            signal.reason = `Cooldown active (${cooldownMinutes}m)`;
+            return signal;
+          }
+        }
+      } catch (_) {}
+
+      // Trend filter: prefer longs when SMA20 >= SMA50
+      const upTrend = smaShort && smaLong ? smaShort >= smaLong : false;
+      const recentSlope = prices.slice(-4).reduce((acc, v, i, arr) => i ? acc + (v - arr[i-1]) : acc, 0);
+      const momentumUp = recentSlope > 0;
+
+      // Buy: price near/below lower band with RSI not overbought, and trend/momentum supportive
+      if (bb && rsi !== null) {
+        const nearLower = currentPrice <= bb.lower * 1.002; // within 0.2% of lower band
+        if (nearLower && rsi <= rsiBuy && (upTrend || momentumUp)) {
+          signal.type = 'buy';
+          const distance = Math.max(0.1, ((bb.middle - currentPrice) / bb.middle) * 100);
+          signal.confidence = Math.min(0.95, 0.5 + distance / 2);
+          signal.reason = `Lower band touch with RSI ${rsi.toFixed(1)} and trend OK`;
+          return signal;
+        }
       }
 
-      // Sell condition: price above long SMA by takeProfitPct or mean reversion from upper deviation
-      const aboveLongPct = ((currentPrice - smaLong) / smaLong) * 100;
-      if (aboveLongPct >= takeProfitPct) {
-        signal.type = 'sell';
-        signal.confidence = Math.min(0.9, aboveLongPct / (takeProfitPct || 1));
-        signal.reason = `Gold profit: ${aboveLongPct.toFixed(2)}% above SMA${longPeriod}`;
-        return signal;
+      // Take-profit or mean reversion: price near/above upper band or profitable from last buy
+      if (bb && rsi !== null) {
+        const nearUpper = currentPrice >= bb.upper * 0.998; // within 0.2% of upper band
+        if (nearUpper && rsi >= rsiSell) {
+          signal.type = 'sell';
+          const distance = Math.max(0.1, ((currentPrice - bb.middle) / bb.middle) * 100);
+          signal.confidence = Math.min(0.95, 0.5 + distance / 2);
+          signal.reason = `Upper band touch with RSI ${rsi.toFixed(1)}`;
+          return signal;
+        }
       }
 
-      // Protective sell: recent drop beyond stopLossPct
-      const prev = prices[prices.length - 2] || currentPrice;
-      const dropPct = ((prev - currentPrice) / prev) * 100;
-      if (dropPct >= stopLossPct) {
-        signal.type = 'sell';
-        signal.confidence = Math.min(0.8, dropPct / (stopLossPct || 1));
-        signal.reason = `Gold stop: drop ${dropPct.toFixed(2)}%`;
-        return signal;
-      }
+      // Trailing stop / protective sell from last trade
+      try {
+        const lastTrade = await this.getLastTradeForSymbol('XAUUSD');
+        if (lastTrade && lastTrade.side === 'buy') {
+          const entry = Number(lastTrade.price) || currentPrice;
+          const pnlPct = ((currentPrice - entry) / entry) * 100;
+          if (pnlPct >= minTakeProfitPct) {
+            signal.type = 'sell';
+            signal.confidence = Math.min(0.9, pnlPct / minTakeProfitPct);
+            signal.reason = `Take profit: +${pnlPct.toFixed(2)}% since last buy`;
+            return signal;
+          }
+          const drawdownPct = ((entry - currentPrice) / entry) * 100;
+          if (drawdownPct >= stopLossPct) {
+            signal.type = 'sell';
+            signal.confidence = Math.min(0.85, drawdownPct / stopLossPct);
+            signal.reason = `Stop loss: -${drawdownPct.toFixed(2)}% from entry`;
+            return signal;
+          }
+        }
+      } catch (_) {}
 
       return signal;
     } catch (error) {

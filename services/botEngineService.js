@@ -149,10 +149,10 @@ class BotEngineService {
     // Run immediately
     this.executeBotCycle(botId, sessionId);
 
-    // Then run every 5 minutes
+    // Then run every 60 seconds (gold updates fast, keeps risk manageable)
     const interval = setInterval(() => {
       this.executeBotCycle(botId, sessionId);
-    }, 300000); // 5 minutes
+    }, 60000);
 
     this.botIntervals.set(botId, interval);
   }
