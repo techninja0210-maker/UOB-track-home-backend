@@ -56,7 +56,7 @@ router.post('/bots', authenticateToken, async (req, res) => {
     const {
       name,
       strategy_type,
-      trading_pairs = ['BTCUSDT', 'ETHUSDT'],
+      trading_pairs = ['XAUUSD'],
       risk_settings = {},
       strategy_params = {},
       exchange = 'paper'
@@ -69,6 +69,13 @@ router.post('/bots', authenticateToken, async (req, res) => {
       });
     }
 
+    // Force gold-only configuration
+    const sanitizedPairs = ['XAUUSD'];
+    const sanitizedExchange = 'paper';
+
+    // Coerce strategy to a DB-allowed enum while we route gold in strategy layer
+    const safeStrategyType = 'sma_crossover';
+
     const result = await query(`
       INSERT INTO trading_bots (
         user_id, name, strategy_type, trading_pairs, risk_settings, 
@@ -78,12 +85,12 @@ router.post('/bots', authenticateToken, async (req, res) => {
     `, [
       req.user.id,
       name,
-      strategy_type,
-      JSON.stringify(trading_pairs),
+      safeStrategyType,
+      JSON.stringify(sanitizedPairs),
       JSON.stringify(risk_settings),
       JSON.stringify(strategy_params),
-      exchange,
-      exchange === 'paper'
+      sanitizedExchange,
+      true
     ]);
 
     res.json({
@@ -370,6 +377,29 @@ router.get('/bots/:botId/activity', authenticateToken, async (req, res) => {
     let status = 'Stopped';
     let lastSignal = 'No recent activity';
     let marketAnalysis = 'Market data unavailable';
+    // Live progress + risk metrics (defaults)
+    const signalProgress = {
+      dataCollection: 'complete',
+      technicalAnalysis: 'complete',
+      riskAssessmentPercent: 0,
+      signalValidationPercent: 0,
+      executionReady: 'pending'
+    };
+    const portfolioRisk = {
+      currentExposureUsd: 0,
+      currentExposurePercent: 0,
+      maxPositionSizeUsd: 0,
+      dailyLossLimitUsd: 0,
+      dailyLossUsedUsd: 0,
+      maxOpenPositions: 0,
+      currentOpenPositions: 0
+    };
+    const positionRisk = {
+      stopLossDistancePercent: null,
+      takeProfitDistancePercent: null,
+      riskRewardRatio: '1:1',
+      volatilityImpact: 'Medium'
+    };
 
     if (bot.status === 'running') {
       status = 'Active - Monitoring markets';
@@ -387,6 +417,45 @@ router.get('/bots/:botId/activity', authenticateToken, async (req, res) => {
       } else {
         marketAnalysis = 'Market analysis in progress...';
       }
+
+      // Compute live risk metrics
+      try {
+        const fullBot = await riskManagementService.getBotRiskSettings(botId);
+        if (fullBot) {
+          const portfolioValue = await riskManagementService.getPortfolioValue(fullBot.user_id);
+          const maxPosPct = fullBot.risk_settings.max_position_size_percent || 10;
+          portfolioRisk.maxOpenPositions = fullBot.risk_settings.max_open_positions || 3;
+          // exposure approximation = sum of last 5 trade values where pnl==0 (open) limited data
+          const openPositionsCount = await riskManagementService.getOpenPositions(botId);
+          portfolioRisk.currentOpenPositions = openPositionsCount;
+          const today = new Date().toISOString().split('T')[0];
+          const dailyPnl = await riskManagementService.getDailyPnl(botId, today);
+          const dailyLossLimitPct = fullBot.risk_settings.daily_loss_limit_percent || 5;
+          portfolioRisk.dailyLossLimitUsd = (portfolioValue * dailyLossLimitPct) / 100;
+          portfolioRisk.dailyLossUsedUsd = Math.abs(Math.min(0, dailyPnl));
+          portfolioRisk.maxPositionSizeUsd = (portfolioValue * maxPosPct) / 100;
+          // Estimate exposure from latest filled trades without pnl closed
+          const exposureResult = await query(`
+            SELECT COALESCE(SUM(total_value),0) as exposure
+            FROM bot_trades
+            WHERE bot_id = $1 AND status = 'filled' AND pnl = 0
+          `, [botId]);
+          const exposure = parseFloat(exposureResult.rows[0]?.exposure || 0);
+          portfolioRisk.currentExposureUsd = exposure;
+          portfolioRisk.currentExposurePercent = portfolioValue > 0 ? (exposure / portfolioValue) * 100 : 0;
+
+          // Position risk distances from settings
+          positionRisk.stopLossDistancePercent = fullBot.risk_settings.stop_loss_percent || 2;
+          positionRisk.takeProfitDistancePercent = fullBot.risk_settings.take_profit_percent || 4;
+
+          // Simple progress heuristics
+          signalProgress.riskAssessmentPercent = Math.min(100, Math.round((portfolioRisk.currentExposurePercent / maxPosPct) * 100));
+          signalProgress.signalValidationPercent = Math.min(100, Math.round((openPositionsCount / (fullBot.risk_settings.max_open_positions || 1)) * 100));
+          signalProgress.executionReady = 'pending';
+        }
+      } catch (riskErr) {
+        console.log('Risk metric computation failed:', riskErr.message);
+      }
     }
 
     res.json({
@@ -396,7 +465,10 @@ router.get('/bots/:botId/activity', authenticateToken, async (req, res) => {
       marketAnalysis,
       recentTrades,
       marketData,
-      lastRunAt: bot.last_run_at
+      lastRunAt: bot.last_run_at,
+      signalProgress,
+      portfolioRisk,
+      positionRisk
     });
   } catch (error) {
     console.error('Error fetching bot activity:', error.message);

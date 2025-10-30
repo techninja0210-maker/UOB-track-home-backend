@@ -1,13 +1,10 @@
-const axios = require('axios');
 const { query } = require('../config/database');
-const crypto = require('crypto');
+const cryptoPriceService = require('./cryptoPriceService');
+const goldPriceService = require('./goldPriceService');
 
 class TradingExecutionService {
   constructor() {
     this.exchanges = {
-      binance: this.binanceTrade.bind(this),
-      bybit: this.bybitTrade.bind(this),
-      coinbase: this.coinbaseTrade.bind(this),
       paper: this.paperTrade.bind(this)
     };
   }
@@ -20,10 +17,7 @@ class TradingExecutionService {
         throw new Error('Bot not found');
       }
 
-      const exchangeAccount = await this.getExchangeAccount(bot.user_id, exchange);
-      if (!exchangeAccount && exchange !== 'paper') {
-        throw new Error('Exchange account not found');
-      }
+      const exchangeAccount = null; // Exchanges removed in gold-only system
 
       const tradeData = {
         botId,
@@ -35,8 +29,23 @@ class TradingExecutionService {
         isTestnet: bot.is_paper_trading || exchange === 'paper'
       };
 
+      // If trading gold (XAUUSD) in paper mode, compute crypto settlement details
+      if (symbol === 'XAUUSD') {
+        try {
+          const quoteCurrency = (bot.strategy_params && bot.strategy_params.quoteCurrency) || 'USDT';
+          const goldPricePerGram = await goldPriceService.getCurrentGoldPrice();
+          const cryptoPrices = await cryptoPriceService.getCurrentPrices();
+          const quotePriceUsd = cryptoPrices[quoteCurrency] || cryptoPrices[`${quoteCurrency}`] || 1;
+          const usdNotional = (price || goldPricePerGram) * quantity;
+          const cryptoAmount = usdNotional / quotePriceUsd;
+          tradeData.settlement = { quoteCurrency, usdNotional, cryptoAmount, quotePriceUsd, goldPricePerGram };
+        } catch (e) {
+          console.log('Gold settlement calc failed:', e.message);
+        }
+      }
+
       // Execute trade on selected exchange
-      const result = await this.exchanges[exchange](tradeData, exchangeAccount);
+      const result = await this.exchanges['paper'](tradeData, exchangeAccount);
       
       // Store trade in database
       const tradeRecord = await this.storeTrade({
@@ -66,153 +75,6 @@ class TradingExecutionService {
     }
   }
 
-  // Binance trading
-  async binanceTrade(tradeData, exchangeAccount) {
-    try {
-      const { symbol, side, quantity, price, isTestnet } = tradeData;
-      
-      const baseUrl = isTestnet 
-        ? 'https://testnet.binance.vision'
-        : 'https://api.binance.com';
-
-      const timestamp = Date.now();
-      const queryString = `symbol=${symbol}&side=${side.toUpperCase()}&type=LIMIT&timeInForce=GTC&quantity=${quantity}&price=${price}&timestamp=${timestamp}`;
-      
-      const signature = crypto
-        .createHmac('sha256', exchangeAccount.api_secret_encrypted)
-        .update(queryString)
-        .digest('hex');
-
-      const response = await axios.post(`${baseUrl}/api/v3/order`, null, {
-        params: {
-          symbol,
-          side: side.toUpperCase(),
-          type: 'LIMIT',
-          timeInForce: 'GTC',
-          quantity,
-          price,
-          timestamp,
-          signature
-        },
-        headers: {
-          'X-MBX-APIKEY': exchangeAccount.api_key_encrypted
-        },
-        timeout: 10000
-      });
-
-      return {
-        orderId: response.data.orderId.toString(),
-        status: response.data.status.toLowerCase(),
-        executedPrice: parseFloat(response.data.price),
-        executedQuantity: parseFloat(response.data.executedQty),
-        fee: parseFloat(response.data.fills?.[0]?.commission || 0)
-      };
-    } catch (error) {
-      console.error('Binance trade error:', error.response?.data || error.message);
-      throw new Error(`Binance trade failed: ${error.response?.data?.msg || error.message}`);
-    }
-  }
-
-  // Bybit trading
-  async bybitTrade(tradeData, exchangeAccount) {
-    try {
-      const { symbol, side, quantity, price, isTestnet } = tradeData;
-      
-      const baseUrl = isTestnet 
-        ? 'https://api-testnet.bybit.com'
-        : 'https://api.bybit.com';
-
-      const timestamp = Date.now();
-      const params = {
-        symbol,
-        side: side.toUpperCase(),
-        order_type: 'Limit',
-        qty: quantity,
-        price,
-        time_in_force: 'GTC',
-        api_key: exchangeAccount.api_key_encrypted,
-        timestamp: timestamp
-      };
-
-      const queryString = Object.keys(params)
-        .sort()
-        .map(key => `${key}=${params[key]}`)
-        .join('&');
-
-      const signature = crypto
-        .createHmac('sha256', exchangeAccount.api_secret_encrypted)
-        .update(queryString)
-        .digest('hex');
-
-      const response = await axios.post(`${baseUrl}/v2/private/order/create`, {
-        ...params,
-        sign: signature
-      }, {
-        timeout: 10000
-      });
-
-      if (response.data.ret_code !== 0) {
-        throw new Error(response.data.ret_msg);
-      }
-
-      return {
-        orderId: response.data.result.order_id,
-        status: 'filled', // Bybit doesn't return status in create response
-        executedPrice: parseFloat(price),
-        executedQuantity: parseFloat(quantity),
-        fee: 0 // Will be calculated separately
-      };
-    } catch (error) {
-      console.error('Bybit trade error:', error.response?.data || error.message);
-      throw new Error(`Bybit trade failed: ${error.response?.data?.ret_msg || error.message}`);
-    }
-  }
-
-  // Coinbase trading
-  async coinbaseTrade(tradeData, exchangeAccount) {
-    try {
-      const { symbol, side, quantity, price } = tradeData;
-      
-      const timestamp = Math.floor(Date.now() / 1000);
-      const method = 'POST';
-      const path = '/orders';
-      const body = JSON.stringify({
-        product_id: symbol,
-        side: side.toLowerCase(),
-        order_type: 'limit',
-        price: price.toString(),
-        size: quantity.toString()
-      });
-
-      const message = timestamp + method + path + body;
-      const signature = crypto
-        .createHmac('sha256', exchangeAccount.api_secret_encrypted)
-        .update(message)
-        .digest('base64');
-
-      const response = await axios.post('https://api.exchange.coinbase.com/orders', body, {
-        headers: {
-          'CB-ACCESS-KEY': exchangeAccount.api_key_encrypted,
-          'CB-ACCESS-SIGN': signature,
-          'CB-ACCESS-TIMESTAMP': timestamp,
-          'CB-ACCESS-PASSPHRASE': exchangeAccount.api_passphrase_encrypted,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-
-      return {
-        orderId: response.data.id,
-        status: response.data.status,
-        executedPrice: parseFloat(price),
-        executedQuantity: parseFloat(quantity),
-        fee: 0 // Will be calculated separately
-      };
-    } catch (error) {
-      console.error('Coinbase trade error:', error.response?.data || error.message);
-      throw new Error(`Coinbase trade failed: ${error.response?.data?.message || error.message}`);
-    }
-  }
 
   // Paper trading (simulation)
   async paperTrade(tradeData) {
@@ -243,12 +105,16 @@ class TradingExecutionService {
   async getBotInfo(botId) {
     try {
       const result = await query(`
-        SELECT id, user_id, is_paper_trading, exchange
+        SELECT id, user_id, is_paper_trading, exchange, strategy_params
         FROM trading_bots 
         WHERE id = $1
       `, [botId]);
       
-      return result.rows[0] || null;
+      const bot = result.rows[0] || null;
+      if (bot && typeof bot.strategy_params === 'string') {
+        try { bot.strategy_params = JSON.parse(bot.strategy_params); } catch (_) {}
+      }
+      return bot;
     } catch (error) {
       console.error('Error getting bot info:', error.message);
       return null;

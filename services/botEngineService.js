@@ -50,8 +50,10 @@ class BotEngineService {
   async stopBot(botId) {
     try {
       const bot = this.runningBots.get(botId);
+      // Even if not in memory (e.g., after restart), force status to stopped
       if (!bot) {
-        return { success: false, message: 'Bot is not running' };
+        await this.updateBotStatus(botId, 'stopped');
+        return { success: true, message: 'Bot stopped successfully (no active session)' };
       }
 
       // Clear the interval
@@ -80,7 +82,9 @@ class BotEngineService {
   async pauseBot(botId) {
     try {
       if (!this.runningBots.has(botId)) {
-        return { success: false, message: 'Bot is not running' };
+        // If not running in memory, still mark as paused in DB
+        await this.updateBotStatus(botId, 'paused');
+        return { success: true, message: 'Bot paused successfully (no active session)' };
       }
 
       // Clear the interval
@@ -115,7 +119,12 @@ class BotEngineService {
       // Get the running bot info
       const runningBot = this.runningBots.get(botId);
       if (!runningBot) {
-        return { success: false, message: 'Bot session not found' };
+        // Create a lightweight session and start loop again
+        const session = await this.createBotSession(botId, bot);
+        this.runningBots.set(botId, { bot, sessionId: session.id, startTime: new Date() });
+        await this.updateBotStatus(botId, 'running');
+        this.startBotLoop(botId, session.id);
+        return { success: true, message: 'Bot resumed successfully' };
       }
 
       // Update bot status

@@ -16,17 +16,17 @@ class GoldPriceService {
     this.cache = {
       price: null,
       timestamp: null,
-      ttl: 5 * 60 * 1000 // 5 minutes cache
+      ttl: parseInt(process.env.GOLD_PRICE_TTL_MS || '60000', 10)
     };
   }
 
   /**
    * Get current gold price per gram in USD
    */
-  async getCurrentGoldPrice() {
+  async getCurrentGoldPrice(force = false) {
     try {
-      // Check cache first
-      if (this.isCacheValid()) {
+      // Check cache first unless force refresh
+      if (!force && this.isCacheValid()) {
         console.log('📊 Using cached gold price:', this.cache.price);
         return this.cache.price;
       }
@@ -103,8 +103,8 @@ class GoldPriceService {
   /**
    * Get gold price with metadata
    */
-  async getGoldPriceWithMetadata() {
-    const price = await this.getCurrentGoldPrice();
+  async getGoldPriceWithMetadata(force = false) {
+    const price = await this.getCurrentGoldPrice(force);
     
     return {
       pricePerGram: price,

@@ -7,7 +7,32 @@ const { query } = require('../config/database');
 // Get current real-time gold price
 router.get('/gold/current', async (req, res) => {
   try {
-    const priceData = await goldPriceService.getGoldPriceWithMetadata();
+    const force = req.query.force === '1' || req.query.nocache === '1';
+    const priceData = await goldPriceService.getGoldPriceWithMetadata(force);
+
+    // Calculate 24h change from history if available
+    try {
+      const nowRow = await query(
+        `SELECT price_per_gram_usd, created_at
+         FROM gold_price_history
+         ORDER BY created_at DESC
+         LIMIT 1`
+      );
+      const prevRow = await query(
+        `SELECT price_per_gram_usd, created_at
+         FROM gold_price_history
+         WHERE created_at <= NOW() - INTERVAL '24 hours'
+         ORDER BY created_at DESC
+         LIMIT 1`
+      );
+      const latest = Number(nowRow.rows[0]?.price_per_gram_usd) || priceData.pricePerGram;
+      const prev = Number(prevRow.rows[0]?.price_per_gram_usd) || latest;
+      const change24h = prev > 0 ? ((latest - prev) / prev) * 100 : 0;
+      priceData.change24h = change24h;
+    } catch (_) {
+      priceData.change24h = 0;
+    }
+
     res.json(priceData);
   } catch (error) {
     console.error('Get current gold price error:', error);
