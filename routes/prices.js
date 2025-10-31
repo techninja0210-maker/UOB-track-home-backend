@@ -12,24 +12,43 @@ router.get('/gold/current', async (req, res) => {
 
     // Calculate 24h change from history if available
     try {
+      // Get the most recent price from history
       const nowRow = await query(
         `SELECT price_per_gram_usd, created_at
          FROM gold_price_history
          ORDER BY created_at DESC
          LIMIT 1`
       );
+      
+      // Get price from approximately 24 hours ago (within last 24-26 hours for flexibility)
       const prevRow = await query(
         `SELECT price_per_gram_usd, created_at
          FROM gold_price_history
-         WHERE created_at <= NOW() - INTERVAL '24 hours'
-         ORDER BY created_at DESC
+         WHERE created_at >= NOW() - INTERVAL '26 hours'
+           AND created_at <= NOW() - INTERVAL '23 hours'
+         ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - (NOW() - INTERVAL '24 hours'))))
          LIMIT 1`
       );
+      
+      // If no exact 24h data, use oldest data within last 24 hours
+      let prevData = prevRow.rows[0];
+      if (!prevData) {
+        const fallbackRow = await query(
+          `SELECT price_per_gram_usd, created_at
+           FROM gold_price_history
+           WHERE created_at >= NOW() - INTERVAL '24 hours'
+           ORDER BY created_at ASC
+           LIMIT 1`
+        );
+        prevData = fallbackRow.rows[0];
+      }
+      
       const latest = Number(nowRow.rows[0]?.price_per_gram_usd) || priceData.pricePerGram;
-      const prev = Number(prevRow.rows[0]?.price_per_gram_usd) || latest;
+      const prev = Number(prevData?.price_per_gram_usd) || latest;
       const change24h = prev > 0 ? ((latest - prev) / prev) * 100 : 0;
       priceData.change24h = change24h;
-    } catch (_) {
+    } catch (err) {
+      console.log('24h change calculation error:', err.message);
       priceData.change24h = 0;
     }
 

@@ -199,15 +199,20 @@ class BotEngineService {
       );
 
       if (!signal || signal.type === 'hold') {
+        if (signal && signal.reason) {
+          console.log(`📊 ${symbol}: ${signal.reason}`);
+        }
         return;
       }
 
       // Check if signal meets minimum confidence
-      const minConfidence = bot.risk_settings?.min_signal_confidence || 0.6;
+      const minConfidence = bot.risk_settings?.min_signal_confidence || 0.55;
       if (signal.confidence < minConfidence) {
-        console.log(`Signal confidence ${signal.confidence} below threshold ${minConfidence} for ${symbol}`);
+        console.log(`⚠️ ${symbol}: Signal confidence ${(signal.confidence * 100).toFixed(1)}% below threshold ${(minConfidence * 100).toFixed(1)}% - ${signal.reason}`);
         return;
       }
+
+      console.log(`🎯 ${symbol}: ${signal.type.toUpperCase()} signal (${(signal.confidence * 100).toFixed(1)}% confidence) - ${signal.reason}`);
 
       // Calculate position size
       const portfolioValue = await riskManagementService.getPortfolioValue(bot.user_id);
@@ -293,7 +298,7 @@ class BotEngineService {
         take_profit_percent: 4,
         daily_loss_limit_percent: 5,
         max_open_positions: 3,
-        min_signal_confidence: 0.6,
+        min_signal_confidence: 0.55, // Lowered to 0.55 for more trading opportunities
         ...bot.risk_settings
       };
       
