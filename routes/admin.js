@@ -380,58 +380,173 @@ router.post('/users/:id/reset-password', async (req, res) => {
 
 
 // Get gold prices for admin dashboard (formatted for frontend)
+// NOTE: This endpoint is primarily for initial page load and manual refresh.
+// Real-time updates are handled via WebSocket ('gold-price-update' event).
 router.get('/gold-prices', async (req, res) => {
   try {
     const goldPriceService = require('../services/goldPriceService');
+    const realtimeGoldPriceService = require('../services/realtimeGoldPriceService');
+    const axios = require('axios');
     
-    // Get current gold price
-    const currentPrice = await goldPriceService.getCurrentGoldPrice();
+    // Check if force refresh is requested
+    const forceRefresh = req.query.force === 'true' || req.query.force === '1';
     
-    // Create gold prices array in the format expected by frontend
-    const goldPrices = [
-      {
-        currency: 'USD',
-        price: currentPrice,
-        change_24h: 0, // Would need historical data to calculate
-        last_updated: new Date().toISOString()
-      },
-      {
-        currency: 'EUR',
-        price: currentPrice * 0.85, // Approximate EUR rate
-        change_24h: 0,
-        last_updated: new Date().toISOString()
-      },
-      {
-        currency: 'GBP',
-        price: currentPrice * 0.78, // Approximate GBP rate
-        change_24h: 0,
-        last_updated: new Date().toISOString()
+    // Try to get from real-time service first (if available and fresh)
+    const cachedPrice = realtimeGoldPriceService.getCurrentPrice();
+    if (cachedPrice && !forceRefresh) {
+      // Use cached price from real-time service (avoids unnecessary API calls)
+      let eurRate = 0.85;
+      let gbpRate = 0.78;
+      
+      try {
+        const exchangeResponse = await axios.get('https://api.exchangerate-api.com/v4/latest/USD', {
+          timeout: 3000
+        });
+        if (exchangeResponse.data?.rates) {
+          eurRate = exchangeResponse.data.rates.EUR || 0.85;
+          gbpRate = exchangeResponse.data.rates.GBP || 0.78;
+        }
+      } catch (exchangeError) {
+        // Use defaults
       }
-    ];
+      
+      return res.json([
+        {
+          currency: 'USD',
+          price: cachedPrice.pricePerGram,
+          change_24h: cachedPrice.change24h,
+          last_updated: cachedPrice.timestamp
+        },
+        {
+          currency: 'EUR',
+          price: cachedPrice.eurPricePerGram || parseFloat((cachedPrice.pricePerGram * eurRate).toFixed(2)),
+          change_24h: cachedPrice.change24h,
+          last_updated: cachedPrice.timestamp
+        },
+        {
+          currency: 'GBP',
+          price: cachedPrice.gbpPricePerGram || parseFloat((cachedPrice.pricePerGram * gbpRate).toFixed(2)),
+          change_24h: cachedPrice.change24h,
+          last_updated: cachedPrice.timestamp
+        }
+      ]);
+    }
     
-    res.json(goldPrices);
-  } catch (error) {
-    console.error('Get gold prices error:', error);
-    // Return fallback data
+    // Fallback: Fetch fresh price (if cache not available or force refresh)
+    const usdPricePerGram = await goldPriceService.getCurrentGoldPrice(forceRefresh);
+    
+    if (!usdPricePerGram || isNaN(usdPricePerGram) || usdPricePerGram <= 0) {
+      throw new Error(`Invalid gold price returned: ${usdPricePerGram}`);
+    }
+    
+    // Get exchange rates
+    let eurRate = 0.85;
+    let gbpRate = 0.78;
+    try {
+      const exchangeResponse = await axios.get('https://api.exchangerate-api.com/v4/latest/USD', {
+        timeout: 3000
+      });
+      if (exchangeResponse.data?.rates) {
+        eurRate = exchangeResponse.data.rates.EUR || 0.85;
+        gbpRate = exchangeResponse.data.rates.GBP || 0.78;
+      }
+    } catch (exchangeError) {
+      // Use defaults
+    }
+    
+    // Calculate 24h change
+    let change24h = 0;
+    try {
+      const tableCheck = await query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'gold_price_history'
+        );
+      `);
+      
+      if (tableCheck.rows[0].exists) {
+        const nowRow = await query(`
+          SELECT price_per_gram_usd FROM gold_price_history
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        const prevRow = await query(`
+          SELECT price_per_gram_usd FROM gold_price_history
+          WHERE created_at >= NOW() - INTERVAL '26 hours'
+            AND created_at <= NOW() - INTERVAL '23 hours'
+          ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - (NOW() - INTERVAL '24 hours'))))
+          LIMIT 1
+        `);
+        
+        const latest = Number(nowRow.rows[0]?.price_per_gram_usd) || usdPricePerGram;
+        const prev = Number(prevRow.rows[0]?.price_per_gram_usd) || latest;
+        if (prev > 0) {
+          change24h = ((latest - prev) / prev) * 100;
+        }
+      }
+    } catch (err) {
+      // Ignore
+    }
+    
+    // Return prices
     res.json([
       {
         currency: 'USD',
-        price: 65.50,
-        change_24h: 0,
+        price: parseFloat(usdPricePerGram.toFixed(2)),
+        change_24h: parseFloat(change24h.toFixed(2)),
         last_updated: new Date().toISOString()
       },
       {
         currency: 'EUR',
-        price: 55.68,
-        change_24h: 0,
+        price: parseFloat((usdPricePerGram * eurRate).toFixed(2)),
+        change_24h: parseFloat(change24h.toFixed(2)),
         last_updated: new Date().toISOString()
       },
       {
         currency: 'GBP',
-        price: 51.09,
-        change_24h: 0,
+        price: parseFloat((usdPricePerGram * gbpRate).toFixed(2)),
+        change_24h: parseFloat(change24h.toFixed(2)),
         last_updated: new Date().toISOString()
       }
+    ]);
+  } catch (error) {
+    console.error('❌ Get gold prices error:', error.message);
+    
+    // Try database fallback
+    try {
+      const tableCheck = await query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'gold_price_history'
+        );
+      `);
+      
+      if (tableCheck.rows[0].exists) {
+        const dbPrice = await query(`
+          SELECT price_per_gram_usd, created_at
+          FROM gold_price_history
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        
+        if (dbPrice.rows.length > 0) {
+          const usdPrice = parseFloat(dbPrice.rows[0].price_per_gram_usd);
+          return res.json([
+            { currency: 'USD', price: usdPrice, change_24h: 0, last_updated: dbPrice.rows[0].created_at },
+            { currency: 'EUR', price: usdPrice * 0.85, change_24h: 0, last_updated: dbPrice.rows[0].created_at },
+            { currency: 'GBP', price: usdPrice * 0.78, change_24h: 0, last_updated: dbPrice.rows[0].created_at }
+          ]);
+        }
+      }
+    } catch (dbError) {
+      // Ignore
+    }
+    
+    // Ultimate fallback
+    res.json([
+      { currency: 'USD', price: 65.50, change_24h: 0, last_updated: new Date().toISOString() },
+      { currency: 'EUR', price: 55.68, change_24h: 0, last_updated: new Date().toISOString() },
+      { currency: 'GBP', price: 51.09, change_24h: 0, last_updated: new Date().toISOString() }
     ]);
   }
 });
@@ -551,37 +666,82 @@ router.get('/chart-data', async (req, res) => {
       SELECT 
         DATE(created_at) as date,
         COUNT(*) as transactions,
-        SUM(declared_value) as volume
+        COALESCE(SUM(declared_value), 0) as volume
       FROM receipts 
       WHERE created_at >= NOW() - INTERVAL '${daysInt} days'
       GROUP BY DATE(created_at)
       ORDER BY date
     `);
     
-    // If no data found, generate some sample data for demonstration
-    if (result.rows.length === 0) {
+    // Create a map of existing data by date
+    const dataByDate = {};
+    result.rows.forEach(row => {
+      const dateKey = new Date(row.date).toISOString().split('T')[0];
+      dataByDate[dateKey] = {
+        date: dateKey,
+        transactions: parseInt(row.transactions) || 0,
+        volume: parseFloat(row.volume) || 0
+      };
+    });
+    
+    // Generate complete date range and fill in missing days with zeros
+    const chartData = [];
+    const now = new Date();
+    now.setHours(0, 0, 0, 0); // Start of today
+    
+    for (let i = daysInt - 1; i >= 0; i--) {
+      const date = new Date(now);
+      date.setDate(date.getDate() - i);
+      const dateKey = date.toISOString().split('T')[0];
+      
+      // Use existing data or create zero entry
+      if (dataByDate[dateKey]) {
+        chartData.push(dataByDate[dateKey]);
+      } else {
+        chartData.push({
+          date: dateKey,
+          transactions: 0,
+          volume: 0
+        });
+      }
+    }
+    
+    // If no data at all, generate some sample data for demonstration
+    const hasAnyData = result.rows.length > 0 || chartData.some(d => d.volume > 0 || d.transactions > 0);
+    if (!hasAnyData) {
+      // Generate realistic sample data distributed across the period
       const sampleData = [];
-      const now = new Date();
+      const sampleDays = Math.min(7, daysInt); // Sample data for up to 7 days
+      const daysBetweenSamples = Math.floor(daysInt / sampleDays);
       
       for (let i = daysInt - 1; i >= 0; i--) {
         const date = new Date(now);
         date.setDate(date.getDate() - i);
+        const dateKey = date.toISOString().split('T')[0];
         
-        // Generate some realistic sample data
-        const baseVolume = Math.random() * 10000 + 1000; // $1,000 - $11,000
-        const transactions = Math.floor(Math.random() * 20) + 1; // 1-20 transactions
-        
-        sampleData.push({
-          date: date.toISOString().split('T')[0],
-          transactions: transactions,
-          volume: Math.round(baseVolume * transactions)
-        });
+        // Generate sample data for every Nth day
+        if (i % daysBetweenSamples === 0 && sampleData.filter(d => d.volume > 0).length < sampleDays) {
+          const baseVolume = Math.random() * 100000 + 10000; // $10,000 - $110,000
+          const transactions = Math.floor(Math.random() * 20) + 5; // 5-25 transactions
+          
+          sampleData.push({
+            date: dateKey,
+            transactions: transactions,
+            volume: Math.round(baseVolume * (transactions / 10))
+          });
+        } else {
+          sampleData.push({
+            date: dateKey,
+            transactions: 0,
+            volume: 0
+          });
+        }
       }
       
       return res.json(sampleData);
     }
     
-    res.json(result.rows);
+    res.json(chartData);
   } catch (error) {
     console.error('Get chart data error:', error);
     res.status(500).json({ message: 'Failed to fetch chart data' });

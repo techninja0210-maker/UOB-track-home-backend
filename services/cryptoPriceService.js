@@ -395,30 +395,40 @@ class CryptoPriceService {
   async updatePricesInDatabase(prices) {
     try {
       for (const [symbol, price] of Object.entries(prices)) {
-        // Update current price with timeout
-        await Promise.race([
-          query(
-            `UPDATE crypto_currencies 
-             SET current_price_usd = $1, last_updated = CURRENT_TIMESTAMP
-             WHERE symbol = $2`,
-            [price, symbol]
-          ),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Database update timeout')), 10000)
-          )
-        ]);
+        // Update current price with timeout protection
+        try {
+          await Promise.race([
+            query(
+              `UPDATE crypto_currencies 
+               SET current_price_usd = $1, last_updated = CURRENT_TIMESTAMP
+               WHERE symbol = $2`,
+              [price, symbol]
+            ),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Database update timeout')), 8000)
+            )
+          ]);
+        } catch (updateError) {
+          // Don't log timeout errors (expected in case of DB slow response)
+          if (!updateError.message?.includes('timeout') && !updateError.message?.includes('Timeout')) {
+            console.error(`Database update error for ${symbol}:`, updateError.message);
+          }
+        }
 
-        // Log price history (don't wait for completion)
+        // Log price history (non-blocking, fire and forget)
         query(
           `INSERT INTO crypto_price_history (currency_symbol, price_usd, source)
            VALUES ($1, $2, 'live_api')`,
           [symbol, price]
-        ).catch(err => {
-          console.error('Price history insert failed:', err.message);
+        ).catch(() => {
+          // Silently ignore - price history is non-critical
         });
       }
     } catch (error) {
-      console.error('Database price update error:', error.message);
+      // Only log non-timeout errors
+      if (error && error.message && !error.message.includes('timeout') && !error.message.includes('Timeout')) {
+        console.error('Database price update error:', error.message);
+      }
     }
   }
 

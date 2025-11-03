@@ -85,6 +85,15 @@ router.get('/contracts', async (req, res) => {
     const offsetParam = `$${paramCount}`;
     params.push(offset);
     
+    // Auto-update status from 'upcoming' to 'ongoing' if start_date has passed
+    await query(`
+      UPDATE crowdfunding_contracts 
+      SET status = 'ongoing', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'upcoming' 
+      AND start_date IS NOT NULL 
+      AND start_date <= CURRENT_TIMESTAMP
+    `);
+
     const result = await query(`
       SELECT 
         c.*,

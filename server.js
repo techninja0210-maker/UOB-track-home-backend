@@ -99,6 +99,14 @@ setTimeout(() => {
 const notificationService = require('./services/notificationService');
 notificationService.initialize(io);
 
+// Initialize real-time gold price service (PRIMARY - uses free APIs or Metals.dev with API key)
+const realtimeGoldPriceService = require('./services/realtimeGoldPriceService');
+realtimeGoldPriceService.initialize(io);
+realtimeGoldPriceService.start(); // Start broadcasting gold prices in real-time
+
+// Note: TradingView/exchangerate-api.com doesn't support XAU (gold) on free tier
+// Using real-time service as primary source instead
+
 // Public routes (no authentication required)
 app.use('/api/auth', authRoutes);
 app.use('/api/receipts', require('./routes/receipts'));

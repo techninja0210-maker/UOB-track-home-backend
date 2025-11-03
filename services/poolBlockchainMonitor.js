@@ -207,35 +207,88 @@ class PoolBlockchainMonitor {
         return;
       }
 
-      // For pool wallet system, we need to identify which user made the deposit
-      // This is tricky since all users share the same pool address
-      // We'll need to implement a different approach:
-      
-      // Option 1: Use transaction memo/comment (if supported by the blockchain)
-      // Option 2: Use exact amount matching (user tells us the amount they sent)
-      // Option 3: Use a different system (QR codes with user ID, etc.)
-      
-      // For now, let's create a pending deposit that requires user confirmation
-      await query(
-        `INSERT INTO pool_deposits (currency, amount, pool_address, transaction_hash, status, created_at)
-         VALUES ($1, $2, $3, $4, 'pending', CURRENT_TIMESTAMP)`,
-        [currency, amount, poolAddress, transactionHash]
+      // Try to match this deposit to a pending deposit request by amount and time window (within 24 hours)
+      // This allows automatic crediting when user created a deposit intent before sending
+      const matchResult = await query(
+        `SELECT * FROM deposit_requests 
+         WHERE currency = $1 
+         AND amount BETWEEN $2 - 0.00000001 AND $2 + 0.00000001
+         AND status = 'pending'
+         AND created_at >= NOW() - INTERVAL '24 hours'
+         AND transaction_hash IS NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [currency, amount]
       );
 
-      console.log(`💰 Pool deposit detected: ${amount} ${currency} (${transactionHash})`);
-      
-      // Notify admins about new pool deposit
-      notificationService.notifyAdmins({
-        type: 'info',
-        title: 'New Pool Deposit',
-        message: `${amount} ${currency} deposited to pool wallet`,
-        data: {
-          currency,
+      if (matchResult.rows.length > 0) {
+        // Found a matching deposit request - automatically credit the user
+        const depositRequest = matchResult.rows[0];
+        const userId = depositRequest.user_id;
+
+        console.log(`✅ Matched pool deposit to user ${userId}: ${amount} ${currency} (${transactionHash})`);
+
+        // Update deposit request with transaction hash
+        await query(
+          `UPDATE deposit_requests 
+           SET transaction_hash = $1, status = 'completed', completed_at = NOW()
+           WHERE id = $2`,
+          [transactionHash, depositRequest.id]
+        );
+
+        // Credit user balance using userBalanceService
+        const userBalanceService = require('./userBalanceService');
+        await userBalanceService.creditUserBalance(
+          userId,
+          currency.toUpperCase(),
           amount,
-          transactionHash,
-          poolAddress
-        }
-      });
+          `Pool deposit detected: ${transactionHash}`
+        );
+
+        console.log(`✅ User ${userId} automatically credited ${amount} ${currency} from pool deposit`);
+
+        // Create transaction record
+        await query(
+          `INSERT INTO transactions_ledger (user_id, type, currency, amount, reference_id, meta, created_at)
+           VALUES ($1, 'deposit', $2, $3, $4, $5, NOW())`,
+          [
+            userId,
+            currency.toUpperCase(),
+            amount,
+            depositRequest.id,
+            JSON.stringify({
+              description: `Pool deposit: ${amount} ${currency}`,
+              transaction_hash: transactionHash,
+              pool_address: poolAddress,
+              status: 'completed'
+            })
+          ]
+        );
+
+      } else {
+        // No matching deposit request - create pending deposit for admin review
+        await query(
+          `INSERT INTO pool_deposits (currency, amount, pool_address, transaction_hash, status, created_at)
+           VALUES ($1, $2, $3, $4, 'pending', CURRENT_TIMESTAMP)`,
+          [currency, amount, poolAddress, transactionHash]
+        );
+
+        console.log(`💰 Pool deposit detected (no match): ${amount} ${currency} (${transactionHash})`);
+        
+        // Notify admins about new unmatched pool deposit
+        const notificationService = require('./notificationService');
+        notificationService.notifyAdmins({
+          type: 'info',
+          title: 'New Pool Deposit (Unmatched)',
+          message: `${amount} ${currency} deposited to pool wallet - requires manual review`,
+          data: {
+            currency,
+            amount,
+            transactionHash,
+            poolAddress
+          }
+        });
+      }
 
     } catch (error) {
       console.error('Error processing pool deposit:', error);
