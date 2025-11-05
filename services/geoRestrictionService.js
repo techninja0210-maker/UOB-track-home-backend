@@ -198,9 +198,9 @@ class GeoRestrictionService {
     }
 
     /**
-     * Log restricted registration attempt
+     * Log restricted registration or login attempt
      */
-    static async logRestrictedAttempt(req, email, validationResult) {
+    static async logRestrictedAttempt(req, email, validationResult, actionType = 'registration') {
         try {
             // If VPN was detected, use VPN logging
             if (validationResult.vpnResult && (validationResult.vpnResult.isVPN || validationResult.vpnResult.isUSVPN)) {
@@ -219,9 +219,12 @@ class GeoRestrictionService {
                 RETURNING id, created_at
             `;
 
+            const actionName = actionType === 'login' ? 'login_blocked' : 'registration_blocked';
+            const logMessage = actionType === 'login' ? 'Login blocked' : 'Registration blocked';
+
             const restrictionDetails = {
                 email: email,
-                action: 'registration_blocked',
+                action: actionName,
                 country: validationResult.location?.country,
                 country_code: validationResult.location?.country_code,
                 region: validationResult.location?.region,
@@ -231,7 +234,7 @@ class GeoRestrictionService {
             };
 
             const values = [
-                'user_registration_blocked',
+                `user_${actionName}`,
                 'users',
                 email,
                 JSON.stringify(restrictionDetails),
@@ -240,7 +243,7 @@ class GeoRestrictionService {
             ];
 
             await pool.query(query, values);
-            console.log(`🚫 Registration blocked: ${email} from ${validationResult.location?.country} (${validationResult.location?.city})`);
+            console.log(`🚫 ${logMessage}: ${email} from ${validationResult.location?.country} (${validationResult.location?.city})`);
         } catch (error) {
             console.error('Failed to log restricted attempt:', error);
         }

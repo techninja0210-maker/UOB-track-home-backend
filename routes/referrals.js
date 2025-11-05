@@ -19,7 +19,27 @@ router.get('/my-code', auth.authenticateToken, async (req, res) => {
 router.get('/stats', auth.authenticateToken, async (req, res) => {
   try {
     const stats = await ReferralService.getReferralStats(req.user.id);
-    res.json(stats);
+    
+    // Also check if current user was referred by someone
+    const referrerResult = await query(
+      `SELECT 
+         r.id,
+         r.referral_code,
+         r.created_at as referral_date,
+         u.id as referrer_id,
+         u.full_name as referrer_name,
+         u.email as referrer_email
+       FROM referrals r
+       JOIN users u ON r.referrer_id = u.id
+       WHERE r.referred_id = $1
+       LIMIT 1`,
+      [req.user.id]
+    );
+    
+    res.json({
+      ...stats,
+      referredBy: referrerResult.rows[0] || null
+    });
   } catch (error) {
     console.error('Get referral stats error:', error);
     res.status(500).json({ message: 'Failed to get referral statistics' });

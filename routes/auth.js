@@ -193,6 +193,36 @@ router.post('/login', async (req, res) => {
             });
         }
 
+        // Check geographic restrictions and VPN detection BEFORE authentication
+        const locationValidation = await GeoRestrictionService.validateUserLocation(req);
+        if (!locationValidation.success) {
+            // Log the restricted login attempt
+            await GeoRestrictionService.logRestrictedAttempt(req, email, locationValidation, 'login');
+            
+            // Determine error type
+            const errorType = locationValidation.vpnResult && (locationValidation.vpnResult.isVPN || locationValidation.vpnResult.isUSVPN) 
+                ? 'VPN_DETECTED' 
+                : 'GEOGRAPHIC_RESTRICTION';
+            
+            return res.status(403).json({
+                success: false,
+                error: errorType,
+                message: locationValidation.error.message,
+                details: locationValidation.error.details,
+                title: locationValidation.error.title,
+                supportEmail: locationValidation.error.supportEmail,
+                location: {
+                    country: locationValidation.location?.country,
+                    city: locationValidation.location?.city
+                },
+                vpnInfo: locationValidation.vpnResult ? {
+                    provider: locationValidation.vpnResult.provider,
+                    confidence: locationValidation.vpnResult.confidence,
+                    isUSVPN: locationValidation.vpnResult.isUSVPN
+                } : null
+            });
+        }
+
         // Find user
         const user = await User.findByEmail(email);
         if (!user) {
