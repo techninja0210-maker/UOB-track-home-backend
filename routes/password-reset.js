@@ -11,7 +11,7 @@ const emailService = require('../services/emailService');
  */
 router.post('/request', async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, twoFactorCode } = req.body;
 
     if (!email) {
       return res.status(400).json({ message: 'Email is required' });
@@ -29,34 +29,40 @@ router.post('/request', async (req, res) => {
 
     const user = result.rows[0];
 
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-    const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour from now
-
-    // Store reset token in database
-    await query(
-      `UPDATE users 
-       SET reset_token = $1, reset_token_expiry = $2 
-       WHERE id = $3`,
-      [resetTokenHash, resetTokenExpiry, user.id]
-    );
-
-    // Send reset email
-    const emailResult = await emailService.sendPasswordResetEmail(email, resetToken, user.full_name);
+    // Check if user has 2FA enabled
+    const has2FA = user.two_factor_enabled && user.totp_secret;
     
-    // If email sending fails, still return success (don't reveal email issues)
-    // But log the error for debugging
-    if (!emailResult.success) {
-      console.error('Email sending failed:', emailResult.error);
-      // Still return success to user (security best practice)
-    } else if (emailResult.previewUrl) {
-      // In development mode, log the preview URL so user can access the email
-      console.log('\n📧 EMAIL PREVIEW URL (Use this if email goes to spam):');
-      console.log(`   ${emailResult.previewUrl}\n`);
+    // If 2FA is enabled, require TOTP token
+    if (has2FA) {
+      if (!twoFactorCode) {
+        // 2FA is enabled but code is missing
+        return res.json({
+          requiresTwoFactor: true,
+          message: 'Two-factor authentication is enabled for this account. Please enter the 6-digit code from your authenticator app.'
+        });
+      }
+
+      // Verify TOTP token
+      const TOTPService = require('../services/totpService');
+      const isValidToken = TOTPService.verifyToken(user.totp_secret, twoFactorCode);
+      
+      if (!isValidToken) {
+        return res.status(401).json({ 
+          message: 'Invalid verification code. Please try again.',
+          requiresTwoFactor: true
+        });
+      }
+      
+      // 2FA verified successfully - return verified status to show password reset form
+      return res.json({
+        verified: true,
+        message: 'Verification successful. You can now reset your password.'
+      });
     }
 
-    res.json({ 
+    // If no 2FA, user doesn't exist or 2FA is not enabled
+    // Don't reveal that user doesn't exist (security best practice)
+    return res.json({ 
       message: 'If an account with that email exists, a password reset link has been sent.' 
     });
 
@@ -117,7 +123,94 @@ router.get('/verify/:token', async (req, res) => {
 });
 
 /**
- * Reset password
+ * Reset password directly after 2FA verification
+ * POST /api/password-reset/reset-direct
+ */
+router.post('/reset-direct', async (req, res) => {
+  try {
+    const { email, twoFactorCode, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+      return res.status(400).json({ message: 'Email and new password are required' });
+    }
+
+    // Validate password strength
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    // Check if user exists
+    const result = await query('SELECT * FROM users WHERE email = $1', [email]);
+
+    if (result.rows.length === 0) {
+      // Don't reveal that user doesn't exist (security best practice)
+      return res.status(400).json({ message: 'Invalid request' });
+    }
+
+    const user = result.rows[0];
+
+    // Verify 2FA is enabled and code is provided
+    const has2FA = user.two_factor_enabled && user.totp_secret;
+    
+    if (!has2FA) {
+      return res.status(400).json({ message: 'Two-factor authentication is required for this operation' });
+    }
+
+    if (!twoFactorCode) {
+      return res.status(400).json({ 
+        message: 'Verification code is required',
+        requiresTwoFactor: true
+      });
+    }
+
+    // Verify TOTP token
+    const TOTPService = require('../services/totpService');
+    const isValidToken = TOTPService.verifyToken(user.totp_secret, twoFactorCode);
+    
+    if (!isValidToken) {
+      return res.status(401).json({ 
+        message: 'Invalid verification code. Please try again.',
+        requiresTwoFactor: true
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await query(
+      `UPDATE users 
+       SET password_hash = $1, 
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [hashedPassword, user.id]
+    );
+
+    // Log the password reset
+    await query(
+      `INSERT INTO audit_log (user_id, action, details, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        user.id,
+        'password_reset',
+        { email: user.email, method: 'direct_2fa' },
+        req.ip || '::1',
+        req.headers['user-agent'] || 'Unknown'
+      ]
+    );
+
+    res.json({ 
+      message: 'Password has been reset successfully. You can now login with your new password.' 
+    });
+
+  } catch (error) {
+    console.error('Direct password reset error:', error);
+    res.status(500).json({ message: 'Failed to reset password' });
+  }
+});
+
+/**
+ * Reset password (using token from email)
  * POST /api/password-reset/reset
  */
 router.post('/reset', async (req, res) => {
