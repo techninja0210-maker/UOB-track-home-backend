@@ -40,8 +40,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Test database connection
-pool.query('SELECT NOW()', (err, res) => {
+// Test database connection and optionally auto-initialize
+pool.query('SELECT NOW()', async (err, res) => {
   if (err) {
     console.error('❌ Database connection error (non-fatal, continuing):', err);
     // Do not exit; allow server to run and endpoints to return 5xx instead of crashing
@@ -49,11 +49,25 @@ pool.query('SELECT NOW()', (err, res) => {
     console.log('✅ PostgreSQL database connected successfully');
     console.log('📊 Database time:', res.rows[0].now);
     
-    // Crowdfunding tables are initialized via final-init.sql
-    console.log('✅ Crowdfunding tables initialized via database schema');
-    
-    // Create withdrawal_requests table if it doesn't exist
-    createWithdrawalTable();
+    // Optional: Auto-initialize database if enabled and tables don't exist
+    if (process.env.AUTO_INIT_DB === 'true') {
+      try {
+        const { checkDatabaseInitialization } = require('./database/auto-init');
+        const dbStatus = await checkDatabaseInitialization();
+        if (!dbStatus.initialized) {
+          console.log('🔍 Database not fully initialized. Missing tables:', dbStatus.missingTables);
+          console.log('⚠️  To auto-initialize, set AUTO_INIT_DB=true in .env');
+          console.log('💡 Or run manually: npm run db:init');
+        } else {
+          console.log('✅ Database initialized and ready');
+        }
+      } catch (error) {
+        console.warn('⚠️  Could not check database initialization:', error.message);
+      }
+    } else {
+      // Just check if withdrawal table exists (legacy support)
+      createWithdrawalTable();
+    }
   }
 });
 
