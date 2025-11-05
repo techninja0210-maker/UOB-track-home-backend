@@ -43,7 +43,18 @@ router.post('/request', async (req, res) => {
     );
 
     // Send reset email
-    await emailService.sendPasswordResetEmail(email, resetToken, user.full_name);
+    const emailResult = await emailService.sendPasswordResetEmail(email, resetToken, user.full_name);
+    
+    // If email sending fails, still return success (don't reveal email issues)
+    // But log the error for debugging
+    if (!emailResult.success) {
+      console.error('Email sending failed:', emailResult.error);
+      // Still return success to user (security best practice)
+    } else if (emailResult.previewUrl) {
+      // In development mode, log the preview URL so user can access the email
+      console.log('\n📧 EMAIL PREVIEW URL (Use this if email goes to spam):');
+      console.log(`   ${emailResult.previewUrl}\n`);
+    }
 
     res.json({ 
       message: 'If an account with that email exists, a password reset link has been sent.' 
@@ -51,7 +62,14 @@ router.post('/request', async (req, res) => {
 
   } catch (error) {
     console.error('Password reset request error:', error);
-    res.status(500).json({ message: 'Failed to process password reset request' });
+    console.error('Error details:', error.message, error.stack);
+    
+    // Provide more detailed error message for debugging (in development)
+    const errorMessage = process.env.NODE_ENV === 'development' 
+      ? `Failed to process password reset request: ${error.message}`
+      : 'Failed to process password reset request';
+    
+    res.status(500).json({ message: errorMessage });
   }
 });
 

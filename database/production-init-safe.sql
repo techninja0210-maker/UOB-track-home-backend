@@ -939,6 +939,38 @@ BEGIN
     END IF;
 END $$;
 
+-- Add reset_token and reset_token_expiry columns to users table if they don't exist
+DO $$ 
+BEGIN
+    -- Add reset_token column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'reset_token'
+    ) THEN
+        ALTER TABLE users ADD COLUMN reset_token VARCHAR(255);
+    END IF;
+    
+    -- Add reset_token_expiry column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'reset_token_expiry'
+    ) THEN
+        ALTER TABLE users ADD COLUMN reset_token_expiry TIMESTAMP WITH TIME ZONE;
+    END IF;
+END $$;
+
+-- Add TOTP secret column for 2FA if it doesn't exist
+DO $$ 
+BEGIN
+    -- Add totp_secret column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'totp_secret'
+    ) THEN
+        ALTER TABLE users ADD COLUMN totp_secret VARCHAR(255);
+    END IF;
+END $$;
+
 -- ============================================================================
 -- SEED DATA (Safe for production - minimal required data)
 -- ============================================================================

@@ -24,22 +24,42 @@ class EmailService {
    */
   async sendEmail({ to, subject, html, text }) {
     try {
-      const info = await this.transporter.sendMail({
+      const mailOptions = {
         from: `"${this.fromName}" <${this.fromEmail}>`,
         to,
         subject,
         text,
         html,
-      });
+        // Add headers to reduce spam score
+        headers: {
+          'X-Mailer': 'UOB Security House',
+          'X-Priority': '1',
+          'Importance': 'high',
+        },
+      };
 
-      console.log(`✅ Email sent: ${info.messageId}`);
+      const info = await this.transporter.sendMail(mailOptions);
+
+      console.log(`✅ Email sent successfully!`);
+      console.log(`   To: ${to}`);
+      console.log(`   Subject: ${subject}`);
+      console.log(`   Message ID: ${info.messageId}`);
+      
       if (process.env.NODE_ENV === 'development') {
-        console.log(`📧 Preview URL: ${nodemailer.getTestMessageUrl(info)}`);
+        const previewUrl = nodemailer.getTestMessageUrl(info);
+        if (previewUrl) {
+          console.log(`📧 Email Preview URL: ${previewUrl}`);
+          console.log(`   ⚠️  This is a test email service. In production, configure real SMTP settings.`);
+        }
       }
 
-      return { success: true, messageId: info.messageId };
+      return { success: true, messageId: info.messageId, previewUrl: nodemailer.getTestMessageUrl(info) };
     } catch (error) {
       console.error('❌ Email send error:', error);
+      console.error('   Error details:', error.message);
+      if (error.response) {
+        console.error('   SMTP Response:', error.response);
+      }
       return { success: false, error: error.message };
     }
   }
@@ -52,38 +72,156 @@ class EmailService {
     
     const html = `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>Password Reset Request - UOB Security House</title>
         <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: linear-gradient(135deg, #FFD700, #B8860B); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-          .header h1 { color: #1A1A1A; margin: 0; }
-          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
-          .button { display: inline-block; padding: 15px 30px; background: #FFD700; color: #1A1A1A; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
-          .footer { text-align: center; margin-top: 20px; color: #888; font-size: 12px; }
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+          }
+          .email-wrapper {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+          }
+          .header { 
+            background: linear-gradient(135deg, #FFD700, #B8860B); 
+            padding: 40px 30px; 
+            text-align: center; 
+          }
+          .header h1 { 
+            color: #1A1A1A; 
+            margin: 0;
+            font-size: 24px;
+            font-weight: bold;
+          }
+          .content { 
+            padding: 40px 30px; 
+          }
+          .reset-link-box {
+            background-color: #fff3cd;
+            border: 2px solid #FFD700;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px 0;
+            text-align: center;
+          }
+          .reset-link-box a {
+            display: inline-block;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #FFD700, #B8860B);
+            color: #1A1A1A;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 16px;
+            margin: 10px 0;
+            transition: all 0.3s ease;
+          }
+          .reset-link-box a:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 215, 0, 0.4);
+          }
+          .link-text {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #0066cc;
+            text-align: center;
+          }
+          .link-text a {
+            color: #0066cc;
+            text-decoration: underline;
+          }
+          .warning-box {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+          }
+          .footer { 
+            text-align: center; 
+            padding: 30px;
+            background-color: #f8f9fa;
+            color: #666;
+            font-size: 12px;
+            border-top: 1px solid #dee2e6;
+          }
+          .expiry-notice {
+            background-color: #d1ecf1;
+            border-left: 4px solid #0c5460;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #0c5460;
+          }
+          @media only screen and (max-width: 600px) {
+            .content {
+              padding: 20px 15px;
+            }
+            .header {
+              padding: 30px 20px;
+            }
+            .reset-link-box a {
+              padding: 12px 30px;
+              font-size: 14px;
+            }
+          }
         </style>
       </head>
       <body>
-        <div class="container">
+        <div class="email-wrapper">
           <div class="header">
             <h1>🔒 Password Reset Request</h1>
           </div>
           <div class="content">
-            <p>Hi ${userName},</p>
-            <p>We received a request to reset your password for your UOB Security House account.</p>
-            <p>Click the button below to reset your password:</p>
-            <p style="text-align: center;">
-              <a href="${resetUrl}" class="button">Reset Password</a>
+            <p>Hi ${userName || 'there'},</p>
+            <p>We received a request to reset your password for your <strong>UOB Security House</strong> account.</p>
+            
+            <div class="reset-link-box">
+              <p style="margin: 0 0 15px 0; font-weight: bold; color: #1A1A1A;">Click the button below to reset your password:</p>
+              <a href="${resetUrl}" style="color: #1A1A1A !important;">Reset My Password</a>
+            </div>
+            
+            <div class="link-text">
+              <p style="margin: 0 0 10px 0; font-weight: bold; color: #333;">Or copy and paste this link into your browser:</p>
+              <a href="${resetUrl}" style="color: #0066cc !important; text-decoration: underline;">${resetUrl}</a>
+            </div>
+            
+            <div class="expiry-notice">
+              ⏰ This link will expire in 1 hour for security reasons.
+            </div>
+            
+            <div class="warning-box">
+              <p style="margin: 0; font-weight: bold;">⚠️ Security Notice:</p>
+              <p style="margin: 5px 0 0 0;">If you didn't request a password reset, please ignore this email. Your password will remain unchanged.</p>
+            </div>
+            
+            <p style="margin-top: 30px;">If you have any questions or concerns, please contact our support team.</p>
+            
+            <p style="margin-top: 20px;">
+              Best regards,<br>
+              <strong>UOB Security House Team</strong>
             </p>
-            <p>Or copy and paste this link into your browser:</p>
-            <p style="word-break: break-all; color: #666;">${resetUrl}</p>
-            <p><strong>This link will expire in 1 hour.</strong></p>
-            <p>If you didn't request a password reset, please ignore this email or contact support if you have concerns.</p>
-            <p>Best regards,<br>UOB Security House Team</p>
           </div>
           <div class="footer">
-            <p>© ${new Date().getFullYear()} UOB Security House. All rights reserved.</p>
+            <p style="margin: 0;">© ${new Date().getFullYear()} UOB Security House. All rights reserved.</p>
+            <p style="margin: 10px 0 0 0;">This is an automated email. Please do not reply to this message.</p>
           </div>
         </div>
       </body>
@@ -91,28 +229,59 @@ class EmailService {
     `;
 
     const text = `
-      Password Reset Request
-      
-      Hi ${userName},
-      
-      We received a request to reset your password for your UOB Security House account.
-      
-      Click this link to reset your password: ${resetUrl}
-      
-      This link will expire in 1 hour.
-      
-      If you didn't request a password reset, please ignore this email.
-      
-      Best regards,
-      UOB Security House Team
+═══════════════════════════════════════════════════════════
+PASSWORD RESET REQUEST - UOB SECURITY HOUSE
+═══════════════════════════════════════════════════════════
+
+Hi ${userName || 'there'},
+
+We received a request to reset your password for your UOB Security House account.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESET YOUR PASSWORD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Click or copy this link into your browser to reset your password:
+
+${resetUrl}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏰ IMPORTANT: This link will expire in 1 hour for security reasons.
+
+⚠️ SECURITY NOTICE:
+If you didn't request a password reset, please ignore this email.
+Your password will remain unchanged.
+
+If you have any questions or concerns, please contact our support team.
+
+Best regards,
+UOB Security House Team
+
+───────────────────────────────────────────────────────────
+© ${new Date().getFullYear()} UOB Security House. All rights reserved.
+This is an automated email. Please do not reply to this message.
+═══════════════════════════════════════════════════════════
     `;
 
-    return this.sendEmail({
+    console.log(`📧 Sending password reset email to: ${email}`);
+    console.log(`🔗 Reset URL: ${resetUrl}`);
+    
+    const result = await this.sendEmail({
       to: email,
-      subject: '🔒 Password Reset Request - UOB Security House',
+      subject: 'Password Reset Request - UOB Security House',
       html,
       text,
     });
+
+    if (result.success) {
+      console.log(`✅ Password reset email sent successfully to ${email}`);
+      console.log(`📧 Email preview available in development mode`);
+    } else {
+      console.error(`❌ Failed to send password reset email to ${email}:`, result.error);
+    }
+
+    return result;
   }
 
   /**

@@ -243,6 +243,34 @@ router.post('/login', async (req, res) => {
             });
         }
 
+        // Check if user has 2FA enabled
+        const has2FA = user.two_factor_enabled && user.totp_secret;
+        
+        // If 2FA is enabled, require TOTP token
+        if (has2FA) {
+            const { twoFactorCode } = req.body;
+            
+            if (!twoFactorCode) {
+                // Password is correct but 2FA code is missing
+                return res.json({
+                    requiresTwoFactor: true,
+                    message: 'Two-factor authentication is enabled. Please enter your verification code.'
+                });
+            }
+
+            // Verify TOTP token
+            const TOTPService = require('../services/totpService');
+            const isValidToken = TOTPService.verifyToken(user.totp_secret, twoFactorCode);
+            
+            if (!isValidToken) {
+                // Log failed login attempt
+                await LoginTrackingService.logFailedLogin(email, req, 'Invalid 2FA code');
+                return res.status(401).json({ 
+                    message: 'Invalid verification code. Please try again.' 
+                });
+            }
+        }
+
         // Update last login
         await User.updateLastLogin(user.id);
 
@@ -671,6 +699,185 @@ router.post('/make-admin', async (req, res) => {
         console.error('Make admin error:', error);
         res.status(500).json({ 
             message: 'Internal server error' 
+        });
+    }
+});
+
+// ============================================================================
+// TWO-FACTOR AUTHENTICATION (TOTP) ENDPOINTS
+// ============================================================================
+
+// Generate TOTP secret and QR code for setup
+router.post('/2fa/generate', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+
+        // If user already has 2FA enabled, don't allow regeneration
+        if (user.two_factor_enabled && user.totp_secret) {
+            return res.status(400).json({ 
+                message: '2FA is already enabled. Please disable it first if you want to set up a new device.' 
+            });
+        }
+
+        const TOTPService = require('../services/totpService');
+        
+        // Generate secret
+        const secretData = TOTPService.generateSecret(user.id, user.email);
+        
+        // Generate QR code
+        const qrCodeDataUrl = await TOTPService.generateQRCode(secretData.otpauth_url);
+        
+        // Format manual entry key
+        const manualEntryKey = TOTPService.formatManualEntryKey(secretData.manual_entry_key);
+
+        res.json({
+            success: true,
+            secret: secretData.secret, // Temporary - will be saved after verification
+            qrCode: qrCodeDataUrl,
+            manualEntryKey: manualEntryKey,
+            message: 'Scan the QR code with your authenticator app or enter the key manually.'
+        });
+
+    } catch (error) {
+        console.error('2FA generation error:', error);
+        res.status(500).json({ 
+            message: 'Failed to generate 2FA setup' 
+        });
+    }
+});
+
+// Verify and enable TOTP 2FA
+router.post('/2fa/verify', authenticateToken, async (req, res) => {
+    try {
+        const { secret, token } = req.body;
+
+        if (!secret || !token) {
+            return res.status(400).json({ 
+                message: 'Secret and verification token are required' 
+            });
+        }
+
+        const user = await User.findById(req.user.id);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+
+        // Verify the token
+        const TOTPService = require('../services/totpService');
+        const isValid = TOTPService.verifyToken(secret, token);
+
+        if (!isValid) {
+            return res.status(400).json({ 
+                message: 'Invalid verification code. Please try again.' 
+            });
+        }
+
+        // Save the secret and enable 2FA
+        await query(
+            `UPDATE users 
+             SET totp_secret = $1, 
+                 two_factor_enabled = TRUE, 
+                 updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $2`,
+            [secret, user.id]
+        );
+
+        console.log(`✅ 2FA enabled for user ${user.id}`);
+
+        res.json({
+            success: true,
+            message: 'Two-factor authentication has been enabled successfully!'
+        });
+
+    } catch (error) {
+        console.error('2FA verification error:', error);
+        res.status(500).json({ 
+            message: 'Failed to enable 2FA' 
+        });
+    }
+});
+
+// Disable TOTP 2FA
+router.post('/2fa/disable', authenticateToken, async (req, res) => {
+    try {
+        const { password } = req.body;
+
+        if (!password) {
+            return res.status(400).json({ 
+                message: 'Password is required to disable 2FA' 
+            });
+        }
+
+        const user = await User.findById(req.user.id);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+
+        // Verify password before disabling 2FA
+        const isValidPassword = await bcrypt.compare(password, user.password_hash);
+        
+        if (!isValidPassword) {
+            return res.status(401).json({ 
+                message: 'Invalid password' 
+            });
+        }
+
+        // Disable 2FA and clear secret
+        await query(
+            `UPDATE users 
+             SET totp_secret = NULL, 
+                 two_factor_enabled = FALSE, 
+                 updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $1`,
+            [user.id]
+        );
+
+        console.log(`✅ 2FA disabled for user ${user.id}`);
+
+        res.json({
+            success: true,
+            message: 'Two-factor authentication has been disabled successfully.'
+        });
+
+    } catch (error) {
+        console.error('2FA disable error:', error);
+        res.status(500).json({ 
+            message: 'Failed to disable 2FA' 
+        });
+    }
+});
+
+// Get 2FA status
+router.get('/2fa/status', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        
+        if (!user) {
+            return res.status(404).json({ 
+                message: 'User not found' 
+            });
+        }
+
+        res.json({
+            enabled: user.two_factor_enabled && !!user.totp_secret
+        });
+
+    } catch (error) {
+        console.error('2FA status error:', error);
+        res.status(500).json({ 
+            message: 'Failed to get 2FA status' 
         });
     }
 });
