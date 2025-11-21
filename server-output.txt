@@ -1,0 +1,675 @@
+🏦 Initializing pool wallet addresses...
+🔄 Fetching fresh real-time data from Binance API...
+✅ Crypto price updates started (every 60 seconds)
+🤖 Initializing bot engine...
+✅ WebSocket notification service initialized
+✅ Real-time gold price service initialized
+🚀 Starting real-time gold price updates (every 300s)
+📡 WebSocket server status: Initialized
+💡 Note: TradingView WebSocket is the primary source (no API key required)
+💡 This service runs as fallback if TradingView WebSocket fails
+🚀 Backend server running on port 5000
+🔗 API Base URL: http://localhost:5000/api
+💚 Health check: http://localhost:5000/health
+🔌 WebSocket server: ws://localhost:5000
+🔑 Default admin credentials: admin@uobsecurity.com / admin123
+🌐 CORS enabled for: http://localhost:3000,http://127.0.0.1:3000,https://www.uobsecurityhouse.com,https://uobsecurityhouse.com
+💾 Database: PostgreSQL
+🛡️ Rate limiting: Enabled
+📧 Email notifications: Enabled
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,388.26 (-4.935%)
+   ETH: $2,866.51 (-5.412%)
+   ADA: $0.437 (-5.781%)
+   SOL: $134.52 (-1.939%)
+✅ Using fresh Binance API data
+🔄 [1:51:32 AM] Fetching fresh gold price...
+🔍 Fetching fresh gold price from FREE public APIs...
+🔍 Trying exchangerate-api.com for XAU/USD...
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ PostgreSQL database connected successfully
+📊 Database time: 2025-11-21T00:51:33.916Z
+⚠️ exchangerate-api.com doesn't support XAU (expected)
+🔍 Calling Metals.dev API with API key (SVYJ***)...
+Creating withdrawal_requests table...
+✅ Connected to PostgreSQL database
+📥 Metals.dev API response: {
+  "status": "success",
+  "currency": "USD",
+  "unit": "toz",
+  "metals": {
+    "gold": 4078.905,
+    "silver": 50.7135,
+    "platinum": 1523.115,
+    "palladium": 1384.93,
+    "lbma_gold_am": 4062.55,
+    "lbma_gold_pm": 4090.6,
+    "lbma_silver": 50.84,
+    "lbma_platinum_am": 1544,
+    "lbma_platinum_pm": 1545,
+    "lbma_palladium_am": 1405,
+    "lbma_palladium_pm": 1404,
+    "mcx_gold": 4298.4869,
+    "mcx_gold_am": 4290.9822,
+    "mcx_gold_pm": 4286.6337,
+    "mcx_silver": 54.0782,
+    "mcx_silver_am": 54.4373,
+    "mcx_silver_pm": 54.2504,
+    "ibja_gold": 4298.0371,
+    "copper": 0.3457,
+    "aluminum": 0.0869,
+    "lead": 0.0621,
+    "nickel": 0.4488,
+    "zinc": 0.0928,
+    "lme_copper": 0.336,
+    "lme_aluminum": 0.0874,
+    "lme_lead": 0.0628,
+    "lme_nickel": 0.4522,
+    "lme_zinc": 0.0937
+  },
+  "currencies": {
+    "AED": 0.2722940776,
+    "AFN": 0.0150633075,
+    "ALL": 0.0119411883,
+    "AMD": 0.0026172901,
+    "ANG": 0.5546753873,
+    "AOA": 0.0010870451,
+    "ARS": 0.0007027816,
+    "AUD": 0.645544414,
+    "AWG": 0.5586592179,
+    "AZN": 0.588235304,
+    "BAM": 0.5898148857,
+    "BBD": 0.5,
+    "BDT": 0.0081584931,
+    "BGN": 0.5898148857,
+    "BHD": 2.6595744681,
+    "BIF": 0.0003386233,
+    "BMD": 1,
+    "BND": 0.7650265877,
+    "BOB": 0.144603269,
+    "BRL": 0.1875246969,
+    "BSD": 1,
+    "BTC": 87378.9801125441,
+    "BTN": 0.0112748781,
+    "BWP": 0.0734617838,
+    "BYN": 0.2928301111,
+    "BYR": 0.000029283,
+    "BZD": 0.4966009239,
+    "CAD": 0.7098911876,
+    "CDF": 0.0004618553,
+    "CHF": 1.2418567131,
+    "CLP": 0.0010752659,
+    "CNH": 0.1405242272,
+    "CNY": 0.1408562898,
+    "COP": 0.0002657472,
+    "CRC": 0.0019981378,
+    "CUC": 1,
+    "CUP": 0.0416929972,
+    "CVE": 0.0104613916,
+    "CZK": 0.0476788451,
+    "DJF": 0.0056203816,
+    "DKK": 0.1544454365,
+    "DOP": 0.0156734432,
+    "DZD": 0.0076527963,
+    "EEK": 0.0737268607,
+    "EGP": 0.0210932289,
+    "ERN": 0.0666666667,
+    "ETB": 0.006445229,
+    "EUR": 1.1535776479,
+    "FJD": 0.4358965441,
+    "FKP": 1.3087309064,
+    "GBP": 1.3087309064,
+    "GEL": 0.3698061121,
+    "GGP": 1.3087309064,
+    "GHS": 0.0903594171,
+    "GIP": 1.3087309064,
+    "GMD": 0.0135438304,
+    "GNF": 0.0001150877,
+    "GTQ": 0.1304979387,
+    "GYD": 0.0047792182,
+    "HKD": 0.1284343126,
+    "HNL": 0.0379979966,
+    "HRK": 0.1531060652,
+    "HTG": 0.0076361563,
+    "HUF": 0.0030187285,
+    "IDR": 0.0000597438,
+    "ILS": 0.3063377662,
+    "IMP": 1.3087309064,
+    "INR": 0.0112748781,
+    "IQD": 0.000763115,
+    "IRR": 0.0000236982,
+    "ISK": 0.007847005,
+    "JEP": 1.3087309064,
+    "JMD": 0.0062228967,
+    "JOD": 1.4104372355,
+    "JPY": 0.0063589414,
+    "KES": 0.007712103,
+    "KGS": 0.011406581,
+    "KHR": 0.0002497373,
+    "KMF": 0.0023448237,
+    "KPW": 0.0011110903,
+    "KRW": 0.0006791582,
+    "KWD": 3.2541638198,
+    "KYD": 1.2064594036,
+    "KZT": 0.0019276014,
+    "LAK": 0.0000460389,
+    "LBP": 0.0000111417,
+    "LKR": 0.0032450606,
+    "LRD": 0.0055123836,
+    "LSL": 0.0580719674,
+    "LTL": 0.3340991798,
+    "LVL": 1.6414024585,
+    "LYD": 0.1826867678,
+    "MAD": 0.1077934551,
+    "MDL": 0.058855068,
+    "MGA": 0.0002218956,
+    "MKD": 0.0187342621,
+    "MMK": 0.0004761945,
+    "MNT": 0.0002803604,
+    "MOP": 0.1246935074,
+    "MRU": 0.0251067937,
+    "MUR": 0.0216802681,
+    "MVR": 0.0647407633,
+    "MWK": 0.0005766938,
+    "MXN": 0.0544222742,
+    "MYR": 0.2405892009,
+    "MZN": 0.015649591,
+    "NAD": 0.0580719674,
+    "NGN": 0.0006881018,
+    "NIO": 0.0271733262,
+    "NOK": 0.0980577807,
+    "NPR": 0.0070434972,
+    "NTD": 0.0337206,
+    "NZD": 0.55938468,
+    "OMR": 2.5981132914,
+    "PAB": 1,
+    "PEN": 0.295867452,
+    "PGK": 0.2363861579,
+    "PHP": 0.0169356079,
+    "PKR": 0.0035386143,
+    "PLN": 0.2723912623,
+    "PYG": 0.0001421717,
+    "QAR": 0.2747252747,
+    "RON": 0.2267048947,
+    "RSD": 0.0098357532,
+    "RUB": 0.0124930281,
+    "RWF": 0.0006880691,
+    "SAR": 0.2666666667,
+    "SBD": 0.1217042874,
+    "SCR": 0.0668361305,
+    "SDG": 0.0016666477,
+    "SEK": 0.10482393,
+    "SGD": 0.7650265877,
+    "SHP": 1.3087309064,
+    "SKK": 0.0382917629,
+    "SLE": 0.0438023591,
+    "SLL": 0.0000440506,
+    "SOS": 0.0017555057,
+    "SPL": 6.000000024,
+    "SRD": 0.0259712452,
+    "STN": 0.0467295522,
+    "SVC": 0.1142857143,
+    "SYP": 0.0000904429,
+    "SZL": 0.0580719674,
+    "THB": 0.0308250708,
+    "TJS": 0.1078721593,
+    "TMT": 0.2857942211,
+    "TND": 0.3382244246,
+    "TOP": 0.4149326542,
+    "TRY": 0.0235578086,
+    "TTD": 0.1472691995,
+    "TVD": 0.645544414,
+    "TWD": 0.0318895776,
+    "TZS": 0.000410251,
+    "UAH": 0.0237081656,
+    "UGX": 0.0002746864,
+    "USD": 1,
+    "UYU": 0.0251443725,
+    "UZS": 0.0000840757,
+    "VED": 0.004183577,
+    "VEF": 2.77168e-7,
+    "VES": 0.004183577,
+    "VND": 0.0000379222,
+    "VUV": 0.0081632037,
+    "WST": 0.3557807668,
+    "XAF": 0.0017586178,
+    "XCD": 0.3695318274,
+    "XDR": 1.3540104102,
+    "XOF": 0.0017586178,
+    "XPF": 0.0096669807,
+    "YER": 0.0041929982,
+    "ZAR": 0.0580719674,
+    "ZMW": 0.0433675985,
+    "ZWD": 0.00276319,
+    "ZWL": 0.000015157
+  },
+  "timestamps": {
+    "metal": "2025-11-21T00:51:03.413Z",
+    "currency": "2025-11-21T00:51:10.574Z"
+  }
+}
+✅ Gold price from Metals.dev: $131.14/gram (from $4078.91/oz)
+✅ Gold price fetched: $131.14/gram
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+24h change calculation error: relation "gold_price_history" does not exist
+📡 Broadcasted gold price: USD $131.14/gram, EUR €113.7/gram, GBP £100.32/gram (+0.00%)
+📊 Connected clients: 0
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+Executed query {
+  text: '\n            SELECT EXISTS (\n              SELECT ...',
+  duration: 2780,
+  rows: 1
+}
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,388.63 (-4.953%)
+   ETH: $2,866.24 (-5.349%)
+   ADA: $0.436 (-5.867%)
+   SOL: $134.53 (-1.953%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,360.57 (-4.927%)
+   ETH: $2,865.9 (-5.198%)
+   ADA: $0.437 (-5.66%)
+   SOL: $134.46 (-1.954%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,367 (-5.033%)
+   ETH: $2,864.9 (-5.292%)
+   ADA: $0.437 (-5.744%)
+   SOL: $134.42 (-2.133%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,376 (-4.912%)
+   ETH: $2,864.86 (-5.205%)
+   ADA: $0.437 (-5.619%)
+   SOL: $134.57 (-2.159%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+🔄 [1:56:30 AM] Fetching fresh gold price...
+🔍 Fetching fresh gold price from FREE public APIs...
+🔍 Trying exchangerate-api.com for XAU/USD...
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,305.63 (-4.994%)
+   ETH: $2,860.39 (-5.331%)
+   ADA: $0.436 (-5.77%)
+   SOL: $134.22 (-2.421%)
+✅ Using fresh Binance API data
+⚠️ exchangerate-api.com doesn't support XAU (expected)
+🔍 Calling Metals.dev API with API key (SVYJ***)...
+📥 Metals.dev API response: {
+  "status": "success",
+  "currency": "USD",
+  "unit": "toz",
+  "metals": {
+    "gold": 4073.48,
+    "silver": 50.624,
+    "platinum": 1521.325,
+    "palladium": 1384.87,
+    "lbma_gold_am": 4062.55,
+    "lbma_gold_pm": 4090.6,
+    "lbma_silver": 50.84,
+    "lbma_platinum_am": 1544,
+    "lbma_platinum_pm": 1545,
+    "lbma_palladium_am": 1405,
+    "lbma_palladium_pm": 1404,
+    "mcx_gold": 4298.4213,
+    "mcx_gold_am": 4290.9166,
+    "mcx_gold_pm": 4286.5683,
+    "mcx_silver": 54.0774,
+    "mcx_silver_am": 54.4365,
+    "mcx_silver_pm": 54.2495,
+    "ibja_gold": 4297.9717,
+    "copper": 0.3456,
+    "aluminum": 0.0869,
+    "lead": 0.0621,
+    "nickel": 0.4488,
+    "zinc": 0.0928,
+    "lme_copper": 0.336,
+    "lme_aluminum": 0.0874,
+    "lme_lead": 0.0628,
+    "lme_nickel": 0.4522,
+    "lme_zinc": 0.0937
+  },
+  "currencies": {
+    "AED": 0.2722940776,
+    "AFN": 0.0150622355,
+    "ALL": 0.0119343584,
+    "AMD": 0.0026201102,
+    "ANG": 0.5546524494,
+    "AOA": 0.0010865687,
+    "ARS": 0.000701999,
+    "AUD": 0.6455675095,
+    "AWG": 0.5586592179,
+    "AZN": 0.588227894,
+    "BAM": 0.5897711089,
+    "BBD": 0.5,
+    "BDT": 0.0081568388,
+    "BGN": 0.5897711089,
+    "BHD": 2.6595744681,
+    "BIF": 0.0003386138,
+    "BMD": 1,
+    "BND": 0.7649729893,
+    "BOB": 0.1446269848,
+    "BRL": 0.1875035643,
+    "BSD": 1,
+    "BTC": 87343.8728273212,
+    "BTN": 0.0112747059,
+    "BWP": 0.0734210232,
+    "BYN": 0.2928301111,
+    "BYR": 0.000029283,
+    "BZD": 0.4965407585,
+    "CAD": 0.7098480209,
+    "CDF": 0.0004618553,
+    "CHF": 1.241664929,
+    "CLP": 0.0010746784,
+    "CNH": 0.1405136818,
+    "CNY": 0.1405537223,
+    "COP": 0.0002658091,
+    "CRC": 0.0019981987,
+    "CUC": 1,
+    "CUP": 0.0416433909,
+    "CVE": 0.0104606151,
+    "CZK": 0.0476766291,
+    "DJF": 0.0056203347,
+    "DKK": 0.1544327279,
+    "DOP": 0.0156588986,
+    "DZD": 0.0076561983,
+    "EEK": 0.0737213886,
+    "EGP": 0.0210956491,
+    "ERN": 0.0666666667,
+    "ETB": 0.0064403872,
+    "EUR": 1.153492028,
+    "FJD": 0.4359404907,
+    "FKP": 1.308419227,
+    "GBP": 1.308419227,
+    "GEL": 0.3698103517,
+    "GGP": 1.308419227,
+    "GHS": 0.090313367,
+    "GIP": 1.308419227,
+    "GMD": 0.0135461705,
+    "GNF": 0.0001151442,
+    "GTQ": 0.1305043929,
+    "GYD": 0.0047790083,
+    "HKD": 0.1284368544,
+    "HNL": 0.0379983552,
+    "HRK": 0.1530947014,
+    "HTG": 0.0076376558,
+    "HUF": 0.0030184409,
+    "IDR": 0.0000597322,
+    "ILS": 0.3065813875,
+    "IMP": 1.308419227,
+    "INR": 0.0112747059,
+    "IQD": 0.0007631703,
+    "IRR": 0.0000236965,
+    "ISK": 0.0078464248,
+    "JEP": 1.308419227,
+    "JMD": 0.0062226079,
+    "JOD": 1.4104372355,
+    "JPY": 0.0063554612,
+    "KES": 0.007710384,
+    "KGS": 0.0114055103,
+    "KHR": 0.0002497141,
+    "KMF": 0.0023446497,
+    "KPW": 0.0011110903,
+    "KRW": 0.0006791995,
+    "KWD": 3.2539951545,
+    "KYD": 1.202413558,
+    "KZT": 0.0019275074,
+    "LAK": 0.000046039,
+    "LBP": 0.0000111437,
+    "LKR": 0.0032448346,
+    "LRD": 0.0055102029,
+    "LSL": 0.0580625013,
+    "LTL": 0.3340743825,
+    "LVL": 1.6412806317,
+    "LYD": 0.1826886856,
+    "MAD": 0.1077929577,
+    "MDL": 0.0588613124,
+    "MGA": 0.0002219674,
+    "MKD": 0.018734762,
+    "MMK": 0.0004761535,
+    "MNT": 0.0002803686,
+    "MOP": 0.1246959752,
+    "MRU": 0.0251073655,
+    "MUR": 0.0216668291,
+    "MVR": 0.064747344,
+    "MWK": 0.000576714,
+    "MXN": 0.0544295843,
+    "MYR": 0.2405991286,
+    "MZN": 0.015648709,
+    "NAD": 0.0580625013,
+    "NGN": 0.0006877908,
+    "NIO": 0.0271735966,
+    "NOK": 0.0980566822,
+    "NPR": 0.0070433896,
+    "NTD": 0.0337206,
+    "NZD": 0.5594133041,
+    "OMR": 2.5985398237,
+    "PAB": 1,
+    "PEN": 0.2958527387,
+    "PGK": 0.2363854792,
+    "PHP": 0.0169344561,
+    "PKR": 0.0035385411,
+    "PLN": 0.2723625997,
+    "PYG": 0.00014221,
+    "QAR": 0.2747252747,
+    "RON": 0.226692001,
+    "RSD": 0.0098346355,
+    "RUB": 0.0124920133,
+    "RWF": 0.0006879488,
+    "SAR": 0.2666666667,
+    "SBD": 0.121692742,
+    "SCR": 0.0668332541,
+    "SDG": 0.0016664832,
+    "SEK": 0.1048151797,
+    "SGD": 0.7649729893,
+    "SHP": 1.308419227,
+    "SKK": 0.0382889208,
+    "SLE": 0.0438023591,
+    "SLL": 0.0000440506,
+    "SOS": 0.0017542174,
+    "SPL": 6.000000024,
+    "SRD": 0.0259700289,
+    "STN": 0.0467054092,
+    "SVC": 0.1142857143,
+    "SYP": 0.0000904429,
+    "SZL": 0.0580625013,
+    "THB": 0.0308240179,
+    "TJS": 0.1078730007,
+    "TMT": 0.2858626361,
+    "TND": 0.338139335,
+    "TOP": 0.414837239,
+    "TRY": 0.023559749,
+    "TTD": 0.147262768,
+    "TVD": 0.6455675095,
+    "TWD": 0.0318921963,
+    "TZS": 0.0004105724,
+    "UAH": 0.0237045721,
+    "UGX": 0.0002749912,
+    "USD": 1,
+    "UYU": 0.0251432674,
+    "UZS": 0.0000841387,
+    "VED": 0.0041781827,
+    "VEF": 2.77168e-7,
+    "VES": 0.0041781827,
+    "VND": 0.0000380902,
+    "VUV": 0.0081642952,
+    "WST": 0.3559101694,
+    "XAF": 0.0017584873,
+    "XCD": 0.3693841793,
+    "XDR": 1.3539992702,
+    "XOF": 0.0017584873,
+    "XPF": 0.0096662632,
+    "YER": 0.0041929029,
+    "ZAR": 0.0580625013,
+    "ZMW": 0.0433675985,
+    "ZWD": 0.00276319,
+    "ZWL": 0.000015157
+  },
+  "timestamps": {
+    "metal": "2025-11-21T00:56:02.968Z",
+    "currency": "2025-11-21T00:55:10.469Z"
+  }
+}
+✅ Gold price from Metals.dev: $130.97/gram (from $4073.48/oz)
+✅ Gold price fetched: $130.97/gram
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+24h change calculation error: relation "gold_price_history" does not exist
+📡 Broadcasted gold price: USD $130.97/gram, EUR €113.55/gram, GBP £100.19/gram (+0.00%)
+📊 Connected clients: 0
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+Executed query {
+  text: '\n            SELECT EXISTS (\n              SELECT ...',
+  duration: 2749,
+  rows: 1
+}
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,318.2 (-4.99%)
+   ETH: $2,860.42 (-5.342%)
+   ADA: $0.436 (-5.768%)
+   SOL: $134.22 (-2.456%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,227.33 (-5.076%)
+   ETH: $2,859.1 (-5.364%)
+   ADA: $0.436 (-5.814%)
+   SOL: $134.06 (-2.573%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,272.41 (-5.016%)
+   ETH: $2,860.62 (-5.293%)
+   ADA: $0.436 (-5.727%)
+   SOL: $134.16 (-2.528%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+🔄 Fetching fresh real-time data from Binance API...
+🔄 Fetching real-time prices from Binance API...
+🔑 Using Binance API key for enhanced rate limits
+✅ Binance API Success - Real-time prices fetched:
+   BTC: $87,284 (-5.024%)
+   ETH: $2,862.4 (-5.235%)
+   ADA: $0.437 (-5.642%)
+   SOL: $134.19 (-2.507%)
+✅ Using fresh Binance API data
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database
+✅ Connected to PostgreSQL database

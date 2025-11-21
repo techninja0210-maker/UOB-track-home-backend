@@ -1,7 +1,7 @@
 services:
   - type: web
     name: track-platform-backend
-    env: node
+    runtime: node
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
@@ -12,7 +12,20 @@ services:
         value: 5000
       - key: JWT_SECRET
         generateValue: true
-      - key: ALLOWED_ORIGINS
-        sync: false
-      - key: DATABASE_URL
-        sync: false
+      - key: AUTO_INIT_DB
+        value: "true"
+      # Note: The following environment variables must be set manually in Render Dashboard:
+      # - DATABASE_URL (PostgreSQL connection string)
+      # - ALLOWED_ORIGINS (comma-separated list of allowed frontend URLs)
+      # - WALLET_ENCRYPTION_KEY (32-byte encryption key for wallet security)
+      # - MASTER_WALLET_SEED (BIP39 mnemonic seed phrase)
+      # - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS (Email configuration)
+      # - FROM_EMAIL, FROM_NAME (Email sender details)
+      # - FRONTEND_URL (Frontend URL for password reset links)
+      # - METALS_DEV_API_KEY (Gold price API key)
+      # - ETH_RPC_URL (Ethereum RPC endpoint)
+      # - BTC_API_URL (Bitcoin API endpoint)
+      # Optional:
+      # - NOONES_API_KEY, NOONES_SECRET_KEY (Noones API credentials)
+      # - BINANCE_API_URL (Binance API endpoint override)
+      # - COINGECKO_API_URL (CoinGecko API endpoint override)
