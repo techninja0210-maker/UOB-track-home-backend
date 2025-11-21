@@ -52,17 +52,24 @@ pool.query('SELECT NOW()', async (err, res) => {
     // Optional: Auto-initialize database if enabled and tables don't exist
     if (process.env.AUTO_INIT_DB === 'true') {
       try {
-        const { checkDatabaseInitialization } = require('./database/auto-init');
+        const { checkDatabaseInitialization, autoInitializeDatabase } = require('./database/auto-init');
         const dbStatus = await checkDatabaseInitialization();
         if (!dbStatus.initialized) {
           console.log('🔍 Database not fully initialized. Missing tables:', dbStatus.missingTables);
-          console.log('⚠️  To auto-initialize, set AUTO_INIT_DB=true in .env');
-          console.log('💡 Or run manually: npm run db:init');
+          console.log('🚀 Auto-initializing database...');
+          const initialized = await autoInitializeDatabase();
+          if (initialized) {
+            console.log('✅ Database auto-initialization complete!');
+          } else {
+            console.log('⚠️  Auto-initialization did not run (may already be in progress)');
+            console.log('💡 Or run manually: npm run db:init');
+          }
         } else {
           console.log('✅ Database initialized and ready');
         }
       } catch (error) {
-        console.warn('⚠️  Could not check database initialization:', error.message);
+        console.error('❌ Could not auto-initialize database:', error.message);
+        console.log('💡 Run manually: npm run db:init');
       }
     } else {
       // Just check if withdrawal table exists (legacy support)

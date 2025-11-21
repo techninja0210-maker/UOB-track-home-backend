@@ -9,23 +9,19 @@ const { initProductionSafe } = require('./init-production-safe');
  */
 async function autoInitializeDatabase() {
   try {
-    // Check if core tables exist
-    const tablesCheck = await pool.query(`
-      SELECT COUNT(*) as count
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' 
-      AND table_name IN ('users', 'wallets', 'transactions', 'gold_holdings')
-    `);
-
-    // If less than 4 core tables exist, database needs initialization
-    if (parseInt(tablesCheck.rows[0].count) < 4) {
-      console.log('🔍 Database appears uninitialized. Auto-initializing...');
+    // Use the comprehensive check to see if all required tables exist
+    const dbStatus = await checkDatabaseInitialization();
+    
+    // If any required tables are missing, run initialization
+    if (!dbStatus.initialized && dbStatus.missingTables.length > 0) {
+      console.log('🔍 Database appears uninitialized. Missing tables:', dbStatus.missingTables);
+      console.log('🚀 Auto-initializing database...');
       console.log('📝 Running production database initialization...\n');
       
       // Close current pool connection, init script will create new one
       await pool.end();
       
-      // Run initialization (using safe version)
+      // Run initialization (using safe version - uses CREATE TABLE IF NOT EXISTS)
       await initProductionSafe();
       
       // Re-import pool after initialization
@@ -33,7 +29,7 @@ async function autoInitializeDatabase() {
       console.log('✅ Database auto-initialization complete!\n');
       return true;
     } else {
-      console.log('✅ Database already initialized');
+      console.log('✅ Database already fully initialized - all required tables exist');
       return false;
     }
   } catch (error) {
@@ -59,7 +55,11 @@ async function checkDatabaseInitialization() {
     'withdrawal_requests',
     'referrals',
     'crowdfunding_contracts',
-    'trading_bots'
+    'trading_bots',
+    'pool_addresses',
+    'user_balances',
+    'transactions_ledger',
+    'deposit_requests'
   ];
 
   try {
