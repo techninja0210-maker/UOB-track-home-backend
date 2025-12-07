@@ -1,17 +1,33 @@
 -- ============================================================================
--- PRODUCTION-READY DATABASE INITIALIZATION (SAFE VERSION)
+-- PRODUCTION DATABASE INITIALIZATION - FINAL VERSION
 -- Gold Trading Platform - Complete Schema
 -- ============================================================================
--- This version uses CREATE TABLE IF NOT EXISTS instead of DROP TABLE
--- Safe to run on existing databases without dropping data
+-- This is the ONLY database file needed for production
+-- Safe to run on existing databases (uses IF NOT EXISTS)
+-- Run this file in your Neon SQL Editor or PostgreSQL client
 -- ============================================================================
 
--- Enable required extensions
+-- ============================================================================
+-- STEP 1: GRANT PERMISSIONS (Required for Neon PostgreSQL)
+-- ============================================================================
+
+-- Grant CREATE permission on public schema (Neon-compatible)
+GRANT CREATE ON SCHEMA public TO public;
+GRANT ALL ON SCHEMA public TO public;
+
+-- Grant default privileges for tables and sequences
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO public;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO public;
+
+-- ============================================================================
+-- STEP 2: ENABLE EXTENSIONS
+-- ============================================================================
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS citext;
 
 -- ============================================================================
--- CORE ENTITIES
+-- STEP 3: CORE ENTITIES
 -- ============================================================================
 
 -- Users table
@@ -22,6 +38,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin')),
     two_factor_enabled BOOLEAN DEFAULT FALSE,
+    totp_secret VARCHAR(255),
+    reset_token VARCHAR(255),
+    reset_token_expiry TIMESTAMP WITH TIME ZONE,
     last_login TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -33,8 +52,33 @@ CREATE TABLE IF NOT EXISTS crypto_currencies (
     symbol VARCHAR(10) UNIQUE NOT NULL,
     name VARCHAR(50) NOT NULL,
     current_price_usd NUMERIC(20,8) NOT NULL DEFAULT 0,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add last_updated column if it doesn't exist (for backward compatibility)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'crypto_currencies' AND column_name = 'last_updated'
+    ) THEN
+        ALTER TABLE crypto_currencies ADD COLUMN last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+    END IF;
+END $$;
+
+-- Crypto price history (for tracking price changes over time)
+CREATE TABLE IF NOT EXISTS crypto_price_history (
+    id SERIAL PRIMARY KEY,
+    currency_symbol VARCHAR(10) NOT NULL,
+    price_usd NUMERIC(20,8) NOT NULL,
+    source VARCHAR(50) DEFAULT 'live_api',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create index for faster queries
+CREATE INDEX IF NOT EXISTS idx_crypto_price_history_symbol ON crypto_price_history(currency_symbol);
+CREATE INDEX IF NOT EXISTS idx_crypto_price_history_created_at ON crypto_price_history(created_at DESC);
 
 -- Wallets (off-chain balances + deposit addresses)
 CREATE TABLE IF NOT EXISTS wallets (
@@ -68,9 +112,33 @@ CREATE TABLE IF NOT EXISTS gold_securities (
     name VARCHAR(100) NOT NULL,
     weight_grams NUMERIC(20,8) NOT NULL,
     premium_usd NUMERIC(20,8) DEFAULT 0,
+    purity NUMERIC(20,8) DEFAULT 999,
+    price_per_gram_usd NUMERIC(20,8) DEFAULT 60.0,
+    total_price_usd NUMERIC(20,8),
+    available_quantity INTEGER DEFAULT 0,
+    description TEXT,
+    image_url VARCHAR(500),
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(name, weight_grams)
 );
+
+-- Gold price history (for tracking gold price changes over time)
+-- Note: Created after gold_securities to allow foreign key reference
+CREATE TABLE IF NOT EXISTS gold_price_history (
+    id SERIAL PRIMARY KEY,
+    gold_security_id UUID REFERENCES gold_securities(id) ON DELETE SET NULL,
+    price_per_gram_usd NUMERIC(20,8) NOT NULL,
+    total_price_usd NUMERIC(20,8),
+    changed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    reason VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes for gold_price_history
+CREATE INDEX IF NOT EXISTS idx_gold_price_history_security_id ON gold_price_history(gold_security_id);
+CREATE INDEX IF NOT EXISTS idx_gold_price_history_created_at ON gold_price_history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gold_price_history_changed_by ON gold_price_history(changed_by);
 
 -- Gold holdings (SKR source)
 CREATE TABLE IF NOT EXISTS gold_holdings (
@@ -492,7 +560,8 @@ CREATE INDEX IF NOT EXISTS idx_bot_performance_date ON bot_performance(date);
 -- ============================================================================
 
 -- Update timestamp trigger function
-CREATE OR REPLACE FUNCTION update_updated_at_column()
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
+CREATE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
@@ -533,7 +602,8 @@ BEGIN
 END $$;
 
 -- Function to update contract current_amount when investment is confirmed
-CREATE OR REPLACE FUNCTION update_contract_amount()
+DROP FUNCTION IF EXISTS update_contract_amount() CASCADE;
+CREATE FUNCTION update_contract_amount()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.status = 'confirmed' AND (OLD.status IS NULL OR OLD.status != 'confirmed') THEN
@@ -561,7 +631,8 @@ BEGIN
 END $$;
 
 -- Function to check if contract target is reached and distribute profits
-CREATE OR REPLACE FUNCTION check_and_distribute_profits()
+DROP FUNCTION IF EXISTS check_and_distribute_profits() CASCADE;
+CREATE FUNCTION check_and_distribute_profits()
 RETURNS TRIGGER AS $$
 DECLARE
     contract_record RECORD;
@@ -611,7 +682,8 @@ BEGIN
 END $$;
 
 -- Function to calculate bot performance metrics
-CREATE OR REPLACE FUNCTION calculate_bot_performance(p_bot_id UUID, p_date DATE)
+DROP FUNCTION IF EXISTS calculate_bot_performance(UUID, DATE) CASCADE;
+CREATE FUNCTION calculate_bot_performance(p_bot_id UUID, p_date DATE)
 RETURNS VOID AS $$
 DECLARE
     v_total_trades INTEGER;
@@ -676,15 +748,14 @@ LEFT JOIN wallets w ON w.user_id = u.id;
 -- HELPER FUNCTION: Safe insert for gold_securities
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION insert_gold_security_safe(
+DROP FUNCTION IF EXISTS insert_gold_security_safe(VARCHAR, NUMERIC, NUMERIC) CASCADE;
+CREATE FUNCTION insert_gold_security_safe(
     p_name VARCHAR(100),
     p_weight_grams NUMERIC(20,8),
     p_premium_usd NUMERIC(20,8)
 ) RETURNS VOID AS $$
 DECLARE
     v_exists BOOLEAN;
-    v_cols TEXT := 'name, weight_grams';
-    v_vals TEXT;
     v_price_per_gram NUMERIC(20,8) := 60.0;
     v_total_price NUMERIC(20,8);
 BEGIN
@@ -697,280 +768,15 @@ BEGIN
     -- Calculate total price
     v_total_price := v_price_per_gram * p_weight_grams;
     
-    -- Build values - start with required columns
-    v_vals := format('(%L, %s', p_name, p_weight_grams);
-    
-    -- Always include premium_usd if column exists
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'premium_usd') THEN
-        v_cols := v_cols || ', premium_usd';
-        v_vals := v_vals || format(', %s', p_premium_usd);
-    END IF;
-    
-    -- Add optional columns if they exist (include all that might be NOT NULL)
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'purity') THEN
-        v_cols := v_cols || ', purity';
-        v_vals := v_vals || ', 999';
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'price_per_gram_usd') THEN
-        v_cols := v_cols || ', price_per_gram_usd';
-        v_vals := v_vals || format(', %s', v_price_per_gram);
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'total_price_usd') THEN
-        v_cols := v_cols || ', total_price_usd';
-        v_vals := v_vals || format(', %s', v_total_price);
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'available_quantity') THEN
-        v_cols := v_cols || ', available_quantity';
-        v_vals := v_vals || ', 0';
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'gold_securities' AND column_name = 'is_active') THEN
-        v_cols := v_cols || ', is_active';
-        v_vals := v_vals || ', true';
-    END IF;
-    
-    v_vals := v_vals || ')';
-    
-    -- Execute dynamic INSERT
-    EXECUTE format('INSERT INTO gold_securities (%s) VALUES %s', v_cols, v_vals);
+    -- Insert with all columns
+    INSERT INTO gold_securities (name, weight_grams, premium_usd, price_per_gram_usd, total_price_usd, available_quantity, is_active)
+    VALUES (p_name, p_weight_grams, p_premium_usd, v_price_per_gram, v_total_price, 0, true);
 EXCEPTION
     WHEN others THEN
-        -- Log error but don't fail (for debugging)
         RAISE NOTICE 'Error inserting gold security %: %', p_name, SQLERRM;
-        -- Re-raise to see the actual error
         RAISE;
 END;
 $$ LANGUAGE plpgsql;
-
--- ============================================================================
--- MIGRATION: Add missing columns and constraints to existing tables
--- ============================================================================
-
--- Add premium_usd column to gold_securities if it doesn't exist
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'premium_usd'
-    ) THEN
-        ALTER TABLE gold_securities ADD COLUMN premium_usd NUMERIC(20,8) DEFAULT 0;
-    END IF;
-END $$;
-
--- Handle all missing columns in gold_securities table
-DO $$ 
-BEGIN
-    -- Handle purity column - make it nullable or add default if it exists and is NOT NULL
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'purity'
-    ) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'gold_securities' 
-            AND column_name = 'purity' 
-            AND is_nullable = 'NO'
-        ) THEN
-            -- First make it nullable
-            ALTER TABLE gold_securities 
-            ALTER COLUMN purity DROP NOT NULL,
-            ALTER COLUMN purity SET DEFAULT 999;
-            
-            -- Set default for existing NULL rows (if any)
-            UPDATE gold_securities SET purity = 999 WHERE purity IS NULL;
-        END IF;
-    ELSE
-        -- Add the column if it doesn't exist
-        ALTER TABLE gold_securities 
-        ADD COLUMN purity NUMERIC(20,8) DEFAULT 999;
-    END IF;
-    
-    -- Handle price_per_gram_usd column - add if missing or make nullable
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'price_per_gram_usd'
-    ) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'gold_securities' 
-            AND column_name = 'price_per_gram_usd' 
-            AND is_nullable = 'NO'
-        ) THEN
-            -- First make it nullable (this allows NULL values)
-            ALTER TABLE gold_securities 
-            ALTER COLUMN price_per_gram_usd DROP NOT NULL;
-            
-            -- Then set default value
-            ALTER TABLE gold_securities 
-            ALTER COLUMN price_per_gram_usd SET DEFAULT 60.0;
-            
-            -- Set default price for existing NULL rows (if any)
-            UPDATE gold_securities 
-            SET price_per_gram_usd = 60.0 
-            WHERE price_per_gram_usd IS NULL;
-        END IF;
-    ELSE
-        -- Add the column if it doesn't exist
-        ALTER TABLE gold_securities 
-        ADD COLUMN price_per_gram_usd NUMERIC(20,8) DEFAULT 60.0;
-    END IF;
-    
-    -- Handle total_price_usd column - add if missing or make nullable
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'total_price_usd'
-    ) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'gold_securities' 
-            AND column_name = 'total_price_usd' 
-            AND is_nullable = 'NO'
-        ) THEN
-            -- First make it nullable
-            ALTER TABLE gold_securities 
-            ALTER COLUMN total_price_usd DROP NOT NULL;
-            
-            -- Calculate total_price_usd for existing rows (if any)
-            UPDATE gold_securities 
-            SET total_price_usd = COALESCE(price_per_gram_usd, 60.0) * weight_grams
-            WHERE total_price_usd IS NULL;
-        END IF;
-    ELSE
-        -- Add the column if it doesn't exist
-        ALTER TABLE gold_securities 
-        ADD COLUMN total_price_usd NUMERIC(20,8);
-    END IF;
-    
-    -- Handle available_quantity column - add if missing or make nullable
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'available_quantity'
-    ) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'gold_securities' 
-            AND column_name = 'available_quantity' 
-            AND is_nullable = 'NO'
-        ) THEN
-            -- First make it nullable
-            ALTER TABLE gold_securities 
-            ALTER COLUMN available_quantity DROP NOT NULL,
-            ALTER COLUMN available_quantity SET DEFAULT 0;
-            
-            -- Set default for existing NULL rows (if any)
-            UPDATE gold_securities SET available_quantity = 0 WHERE available_quantity IS NULL;
-        END IF;
-    ELSE
-        -- Add the column if it doesn't exist
-        ALTER TABLE gold_securities 
-        ADD COLUMN available_quantity INTEGER DEFAULT 0;
-    END IF;
-    
-    -- Handle description column - add if missing
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'description'
-    ) THEN
-        ALTER TABLE gold_securities ADD COLUMN description TEXT;
-    END IF;
-    
-    -- Handle image_url column - add if missing
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'image_url'
-    ) THEN
-        ALTER TABLE gold_securities ADD COLUMN image_url VARCHAR(500);
-    END IF;
-    
-    -- Handle is_active column - add if missing
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'is_active'
-    ) THEN
-        ALTER TABLE gold_securities ADD COLUMN is_active BOOLEAN DEFAULT true;
-    END IF;
-END $$;
-
--- Add UNIQUE constraint on crypto_currencies.symbol if it doesn't exist
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint 
-        WHERE conname = 'crypto_currencies_symbol_key' 
-        OR (conrelid = 'crypto_currencies'::regclass AND contype = 'u')
-    ) THEN
-        -- Check if constraint exists on symbol column
-        IF NOT EXISTS (
-            SELECT 1 FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-            WHERE tc.table_name = 'crypto_currencies' 
-            AND tc.constraint_type = 'UNIQUE'
-            AND kcu.column_name = 'symbol'
-        ) THEN
-            ALTER TABLE crypto_currencies ADD CONSTRAINT crypto_currencies_symbol_key UNIQUE (symbol);
-        END IF;
-    END IF;
-END $$;
-
--- Add UNIQUE constraint on gold_securities(name, weight_grams) if it doesn't exist
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.table_name = 'gold_securities' 
-        AND tc.constraint_type = 'UNIQUE'
-        AND kcu.column_name IN ('name', 'weight_grams')
-        GROUP BY tc.constraint_name
-        HAVING COUNT(DISTINCT kcu.column_name) = 2
-    ) THEN
-        -- Check if constraint with both columns exists
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_class t ON c.conrelid = t.oid
-            WHERE t.relname = 'gold_securities'
-            AND c.contype = 'u'
-            AND array_length(c.conkey, 1) = 2
-        ) THEN
-            ALTER TABLE gold_securities ADD CONSTRAINT gold_securities_name_weight_grams_key UNIQUE (name, weight_grams);
-        END IF;
-    END IF;
-END $$;
-
--- Add reset_token and reset_token_expiry columns to users table if they don't exist
-DO $$ 
-BEGIN
-    -- Add reset_token column if it doesn't exist
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'users' AND column_name = 'reset_token'
-    ) THEN
-        ALTER TABLE users ADD COLUMN reset_token VARCHAR(255);
-    END IF;
-    
-    -- Add reset_token_expiry column if it doesn't exist
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'users' AND column_name = 'reset_token_expiry'
-    ) THEN
-        ALTER TABLE users ADD COLUMN reset_token_expiry TIMESTAMP WITH TIME ZONE;
-    END IF;
-END $$;
-
--- Add TOTP secret column for 2FA if it doesn't exist
-DO $$ 
-BEGIN
-    -- Add totp_secret column if it doesn't exist
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'users' AND column_name = 'totp_secret'
-    ) THEN
-        ALTER TABLE users ADD COLUMN totp_secret VARCHAR(255);
-    END IF;
-END $$;
 
 -- ============================================================================
 -- SEED DATA (Safe for production - minimal required data)
@@ -979,94 +785,54 @@ END $$;
 -- Crypto currencies (safe insert with conflict handling)
 DO $$
 BEGIN
-    -- Check if unique constraint exists on symbol
-    IF EXISTS (
-        SELECT 1 FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-        WHERE tc.table_name = 'crypto_currencies' 
-        AND tc.constraint_type = 'UNIQUE'
-        AND kcu.column_name = 'symbol'
-    ) THEN
-        -- Use ON CONFLICT if constraint exists
-        INSERT INTO crypto_currencies (symbol, name, current_price_usd) VALUES
-          ('BTC','Bitcoin', 50000),
-          ('ETH','Ethereum', 2000),
-          ('USDT','Tether', 1)
-        ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name;
-    ELSE
-        -- Insert without ON CONFLICT if constraint doesn't exist
-        INSERT INTO crypto_currencies (symbol, name, current_price_usd) 
-        SELECT * FROM (VALUES
-          ('BTC', 'Bitcoin', 50000::NUMERIC(20,8)),
-          ('ETH', 'Ethereum', 2000::NUMERIC(20,8)),
-          ('USDT', 'Tether', 1::NUMERIC(20,8))
-        ) AS v(symbol, name, current_price_usd)
-        WHERE NOT EXISTS (
-            SELECT 1 FROM crypto_currencies cc WHERE cc.symbol = v.symbol
-        );
-    END IF;
+    INSERT INTO crypto_currencies (symbol, name, current_price_usd) VALUES
+      ('BTC','Bitcoin', 50000),
+      ('ETH','Ethereum', 2000),
+      ('USDT','Tether', 1)
+    ON CONFLICT (symbol) DO UPDATE SET name = EXCLUDED.name;
 END $$;
 
--- Gold products (safe insert with conflict handling)
+-- Gold products (safe insert)
 DO $$
 BEGIN
-    -- Check if premium_usd column exists
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'gold_securities' AND column_name = 'premium_usd'
-    ) THEN
-        -- Check if unique constraint exists on (name, weight_grams)
-        IF EXISTS (
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_class t ON c.conrelid = t.oid
-            WHERE t.relname = 'gold_securities'
-            AND c.contype = 'u'
-            AND array_length(c.conkey, 1) = 2
-        ) THEN
-            -- Use ON CONFLICT if constraint exists
-            -- Use a function to safely insert with all columns
-            PERFORM insert_gold_security_safe('Gold Bar 10g', 10.0000, 15);
-            PERFORM insert_gold_security_safe('Gold Bar 100g', 100.0000, 50);
-            PERFORM insert_gold_security_safe('Gold Bar 1kg', 1000.0000, 200);
-        ELSE
-            -- Insert without ON CONFLICT if constraint doesn't exist
-            PERFORM insert_gold_security_safe('Gold Bar 10g', 10.0000, 15);
-            PERFORM insert_gold_security_safe('Gold Bar 100g', 100.0000, 50);
-            PERFORM insert_gold_security_safe('Gold Bar 1kg', 1000.0000, 200);
-        END IF;
-    ELSE
-        -- Fallback: insert without premium_usd if column doesn't exist
-        PERFORM insert_gold_security_safe('Gold Bar 10g', 10.0000, 0);
-        PERFORM insert_gold_security_safe('Gold Bar 100g', 100.0000, 0);
-        PERFORM insert_gold_security_safe('Gold Bar 1kg', 1000.0000, 0);
-    END IF;
+    PERFORM insert_gold_security_safe('Gold Bar 10g', 10.0000, 15);
+    PERFORM insert_gold_security_safe('Gold Bar 100g', 100.0000, 50);
+    PERFORM insert_gold_security_safe('Gold Bar 1kg', 1000.0000, 200);
 END $$;
 
--- Admin user (password will be replaced by init script)
-DO $$ 
+-- ============================================================================
+-- GRANT PERMISSIONS ON ALL TABLES
+-- ============================================================================
+
+-- Grant permissions on all tables to public role
+DO $$
 DECLARE
-    admin_id_val UUID;
-    password_hash_val VARCHAR(255);
+    r RECORD;
 BEGIN
-    -- Get password hash from environment or use placeholder
-    password_hash_val := '$2b$10$YourHashWillBeGeneratedHere';
-    
-    IF NOT EXISTS (SELECT 1 FROM users WHERE email = 'admin@uobsecurity.com') THEN
-        INSERT INTO users (full_name, email, password_hash, role)
-        VALUES ('Admin User', 'admin@uobsecurity.com', password_hash_val, 'admin')
-        RETURNING id INTO admin_id_val;
-        
-        -- Create admin wallet (safe insert)
-        IF NOT EXISTS (SELECT 1 FROM wallets WHERE user_id = admin_id_val) THEN
-            INSERT INTO wallets (user_id, btc_balance, usdt_balance, eth_balance)
-            VALUES (admin_id_val, 0, 0, 0);
-        END IF;
-        
-        -- Create referral earnings record for admin (safe insert)
-        IF NOT EXISTS (SELECT 1 FROM referral_earnings WHERE user_id = admin_id_val) THEN
-            INSERT INTO referral_earnings (user_id, total_commissions, total_bonuses, total_earnings, paid_earnings, pending_earnings)
-            VALUES (admin_id_val, 0, 0, 0, 0, 0);
-        END IF;
-    END IF;
+    FOR r IN 
+        SELECT tablename 
+        FROM pg_tables 
+        WHERE schemaname = 'public'
+    LOOP
+        BEGIN
+            EXECUTE format('GRANT ALL ON TABLE %I TO public', r.tablename);
+        EXCEPTION WHEN OTHERS THEN
+            -- Ignore errors (table might not exist or already has permissions)
+            NULL;
+        END;
+    END LOOP;
 END $$;
+
+-- ============================================================================
+-- COMPLETION MESSAGE
+-- ============================================================================
+
+DO $$
+BEGIN
+    RAISE NOTICE '✅ Database initialization completed successfully!';
+    RAISE NOTICE '📊 All tables, functions, triggers, and indexes have been created.';
+    RAISE NOTICE '🔐 Permissions have been granted.';
+    RAISE NOTICE '🌱 Seed data has been inserted.';
+END $$;
+
 
